@@ -36,16 +36,3 @@ You can use the implemented functions directly by importing them into your scrip
 ```bash
 jupyter alae_experiments.ipynb
 ```
-
-## Bibtex
-
-```bibtex
-@misc{alouadi2025robusttimeseriesgeneration,
-      title={Robust time series generation via Schr\"odinger Bridge: a comprehensive evaluation}, 
-      author={Alexandre Alouadi and Baptiste Barreau and Laurent Carlier and Huyên Pham},
-      year={2025},
-      eprint={2503.02943},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2503.02943}, 
-}
