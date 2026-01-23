@@ -22,8 +22,8 @@ The Schrödinger Bridge and Bass (SBB) formulation, which jointly controls drift
 ## Setup
 To clone the repository, run:
 ```bash
-git clone https://github.com/alexouadi/SBB.git
-cd SBB
+git clone https://github.com/alexouadi/LightSBB-M.git
+cd LightSBB-M
 ```
 
 To install the necessary dependencies for this project, make sure you use python 3.11 and run:
