@@ -1,6 +1,15 @@
 # 📌 Official Implementation of "LightSBB-M: Bridging Schrödinger and Bass for Generative Modeling"
 
-This repository contains the official implementation of the paper ["Robust Time Series Generation via Schrödinger Bridge: A Comprehensive Evaluation"](https://arxiv.org/abs/2503.02943).
+
+<details>
+<summary><strong>Paper description</strong></summary>
+
+This repository contains the official implementation of the paper  
+["LightSBB-M: Bridging Schrödinger and Bass for Generative Modeling"](https://arxiv.org/abs/2503.02943).
+
+</details>
+
+
 
 Authors: Alexandre Alouadi, Pierre Henry-Labordère, Grégoire Loeper, Othmane Mazhar, Huyên Pham, Nizar Touzi
 
