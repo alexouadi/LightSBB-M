@@ -36,3 +36,16 @@ You can use the implemented functions directly by importing them into your scrip
 ```bash
 jupyter alae_experiments.ipynb
 ```
+
+## Bibtex
+
+```bibtex
+@misc{alouadi2026lightsbbmbridgingschrodingerbass,
+      title={LightSBB-M: Bridging Schr\"odinger and Bass for Generative Diffusion Modeling}, 
+      author={Alexandre Alouadi and Pierre Henry-Labordère and Grégoire Loeper and Othmane Mazhar and Huyên Pham and Nizar Touzi},
+      year={2026},
+      eprint={2601.19312},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2601.19312}, 
+}
