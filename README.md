@@ -1,6 +1,6 @@
 # 📌 Official Implementation of "LightSBB-M: Bridging Schrödinger and Bass for Generative Diffusion Modeling"
 
-This repository contains the official implementation of the paper ["LightSBB-M: Bridging Schrödinger and Bass for Generative Diffusion Modeling"](https://arxiv.org/abs/2503.02943).
+This repository contains the official implementation of the paper ["LightSBB-M: Bridging Schrödinger and Bass for Generative Diffusion Modeling"](https://arxiv.org/abs/2601.19312).
 
 Authors: Alexandre Alouadi, Pierre Henry-Labordère, Grégoire Loeper, Othmane Mazhar, Huyên Pham, Nizar Touzi
 
