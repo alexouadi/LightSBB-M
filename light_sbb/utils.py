@@ -9,12 +9,26 @@ from typing import Optional
 from torch.distributions.multivariate_normal import MultivariateNormal
 
 
+"""Utility samplers and evaluation helpers for LightSBB experiments."""
+
+
 class TensorSampler:
+    """Sampler wrapper for an in-memory tensor dataset."""
+
     def __init__(self, tensor, device='cuda'):
+        """Store the tensor on the target device for fast random sampling."""
         self.device = device
         self.tensor = torch.clone(tensor).to(device)
 
     def sample(self, size=5):
+        """Sample unique items without replacement.
+
+        Args:
+            size: Number of elements to sample.
+
+        Returns:
+            Tensor batch with shape ``(size, ...)``.
+        """
         assert size <= self.tensor.shape[0]
 
         ind = torch.tensor(np.random.choice(np.arange(self.tensor.shape[0]), size=size, replace=False),
@@ -23,12 +37,16 @@ class TensorSampler:
 
 
 class GeneratorTwoD:
+    """Synthetic 2D data generator used by benchmark scripts."""
+
     def __init__(self, dataset, dim=2, device="cpu"):
+        """Initialize a generator for ``normal``, ``moons`` or ``8gaussians`` data."""
         self.dim = dim
         self.device = device
         self.dataset = dataset
 
     def sample(self, n):
+        """Sample ``n`` points from the configured dataset family."""
         if self.dataset == 'moons':
             return self.sample_moons(n)
         elif self.dataset == "8gaussians":
@@ -37,10 +55,12 @@ class GeneratorTwoD:
             return self.sample_normal(n)
 
     def sample_normal(self, n):
+        """Sample isotropic Gaussian points in ``dim`` dimensions."""
         m = MultivariateNormal(torch.zeros(self.dim).to(self.device), torch.eye(self.dim).to(self.device))
         return m.sample((n,))
 
     def eight_normal_sample(self, n, scale=1, var=1.):
+        """Sample from a mixture of eight Gaussians arranged on a circle."""
         m = MultivariateNormal(
             torch.zeros(self.dim).to(self.device), math.sqrt(var) * torch.eye(self.dim).to(self.device)
         )
@@ -64,6 +84,7 @@ class GeneratorTwoD:
         return data
 
     def sample_8gaussians(self, n):
+        """Sample the benchmark eight-Gaussians dataset variant."""
         return self.eight_normal_sample(n, scale=5, var=0.1).float()
 
 
@@ -120,7 +141,9 @@ def wasserstein(
 
 
 def get_indepedent_plan_sample_fn(sampler_x, sampler_y):
+    """Create a callable that draws independent source/target batches."""
     def ret_fn(batch_size):
+        """Return one minibatch from each sampler."""
         x_samples = sampler_x(batch_size)
         y_samples = sampler_y(batch_size)
         return x_samples, y_samples
@@ -130,6 +153,11 @@ def get_indepedent_plan_sample_fn(sampler_x, sampler_y):
 
 def sample_alae_beta_large(model, alae_model, beta, x_inds_test, test_inp_images, test_latents,
                 number_of_samples=3, device='cpu', SEED=42, n_pictures=10):
+    """Generate and decode mapped ALAE latents for large-beta models.
+
+    Returns decoded mapped-to-target images, round-tripped source images, and
+    the original input images selected for visualization.
+    """
 
     torch.manual_seed(SEED)
     np.random.seed(SEED)
@@ -179,6 +207,11 @@ def sample_alae_beta_large(model, alae_model, beta, x_inds_test, test_inp_images
 
 def sample_alae(model, model_inv, alae_model, beta, x_inds_test, test_inp_images, test_latents,
                     number_of_samples=3, device='cpu', SEED=42, n_pictures=10):
+    """Generate and decode mapped ALAE latents using model and inverse map.
+
+    Returns decoded mapped-to-target images, round-tripped source images, and
+    the original input images selected for visualization.
+    """
     
     torch.manual_seed(SEED)
     np.random.seed(SEED)

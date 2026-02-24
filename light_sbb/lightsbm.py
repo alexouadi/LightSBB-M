@@ -8,9 +8,29 @@ from torch.distributions.independent import Independent
 from torch.distributions.normal import Normal
 
 
+"""Core LightSBB model and helper inverse network implementations."""
+
+
 class LightSBM(nn.Module):
+    """Stochastic bridge model parameterized as a mixture of Gaussian potentials.
+
+    The module learns a transport map between two distributions by modeling the
+    bridge endpoint sampler and providing a differentiable drift term used
+    during training.
+    """
+
     def __init__(self, dim=2, n_potentials=5, epsilon=1, is_diagonal=True,
                  sampling_batch_size=1, S_diagonal_init=0.1):
+        """Initialize a LightSBM model.
+
+        Args:
+            dim: Data dimensionality.
+            n_potentials: Number of Gaussian potentials in the mixture.
+            epsilon: Diffusion scale used in bridge sampling and drift.
+            is_diagonal: Whether to use diagonal covariance matrices.
+            sampling_batch_size: Internal micro-batch size for forward sampling.
+            S_diagonal_init: Initial value for diagonal covariance entries.
+        """
         super().__init__()
         self.is_diagonal = is_diagonal
         self.dim = dim
@@ -28,12 +48,19 @@ class LightSBM(nn.Module):
         )
 
     def init_r_by_samples(self, samples):
+        """Initialize potential centers from user-provided samples."""
 
         assert samples.shape[0] == self.r.shape[0]
 
         self.r.data = torch.clone(samples.to(self.r.device))
 
     def get_S(self):
+        """Return covariance parameters for each potential.
+
+        Returns:
+            Tensor with shape ``(n_potentials, dim)`` for diagonal mode or
+            ``(n_potentials, dim, dim)`` for full covariance mode.
+        """
         if self.is_diagonal:
             S = torch.exp(self.S_log_diagonal_matrix)
         else:
@@ -42,10 +69,19 @@ class LightSBM(nn.Module):
         return S
 
     def get_r(self):
+        """Return the potential centers tensor of shape (n_potentials, dim)."""
         return self.r
 
     @torch.no_grad()
     def forward(self, x):
+        """Sample bridge end points conditioned on current points ``x``.
+
+        Args:
+            x: Input tensor of shape ``(batch, dim)``.
+
+        Returns:
+            A sampled tensor of shape ``(batch, dim)``.
+        """
         S = self.get_S()
         r = self.get_r()
         epsilon = self.epsilon
@@ -92,6 +128,15 @@ class LightSBM(nn.Module):
         return samples
 
     def get_drift(self, t, x):
+        """Compute the bridge drift for times ``t`` and states ``x``.
+
+        Args:
+            t: Time tensor with values in ``[0, 1)`` and shape ``(batch,)``.
+            x: State tensor with shape ``(batch, dim)``.
+
+        Returns:
+            Drift tensor with shape ``(batch, dim)``.
+        """
         x = x.clone().detach().requires_grad_(True)
         epsilon = self.epsilon
         r = self.get_r()
@@ -123,6 +168,15 @@ class LightSBM(nn.Module):
         return drift
 
     def sample_euler_maruyama(self, x, n_steps):
+        """Simulate a trajectory with Euler-Maruyama discretization.
+
+        Args:
+            x: Initial states of shape ``(batch, dim)``.
+            n_steps: Number of integration steps.
+
+        Returns:
+            Trajectory tensor of shape ``(batch, n_steps + 1, dim)``.
+        """
         epsilon = self.epsilon
         t = torch.zeros(x.shape[0], device=x.device)
         dt = 1 / n_steps
@@ -137,6 +191,15 @@ class LightSBM(nn.Module):
         return torch.stack(trajectory, dim=1)
 
     def sample_at_time_moment(self, x, t):
+        """Sample the stochastic interpolation at a given time moment.
+
+        Args:
+            x: Source samples of shape ``(batch, dim)``.
+            t: Interpolation scalar or tensor broadcastable to ``x``.
+
+        Returns:
+            Interpolated noisy samples with the same shape as ``x``.
+        """
         t = t.to(x.device)
         y = self(x)
 
@@ -144,7 +207,16 @@ class LightSBM(nn.Module):
 
 
 class MLP_network(torch.nn.Module):
+    """Small MLP used to approximate the inverse map in LightSBB training."""
+
     def __init__(self, input_dim, d_model, t_model):
+        """Initialize the inverse network.
+
+        Args:
+            input_dim: Input/output dimensionality.
+            d_model: Hidden width for the sample encoder.
+            t_model: Hidden width for the time encoder.
+        """
         super().__init__()
         self.d_model = d_model
 
@@ -170,6 +242,7 @@ class MLP_network(torch.nn.Module):
         )
 
     def forward(self, t, y):
+        """Predict inverse-mapped samples from time ``t`` and state ``y``."""
         t_embed = self.t_encoder(t)
         y_embed = self.y_encoder(y)
         y_emb = torch.cat([t_embed, y_embed], dim=-1)

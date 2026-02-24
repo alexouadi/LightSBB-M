@@ -4,8 +4,34 @@ import torch.optim as optim
 import numpy as np
 
 
+"""Training loop for LightSBB in the moderate-beta regime."""
+
+
 def training_sbb(sampler_x, sampler_y, model, model_inv, beta, K, lr=1e-3, n_epochs=10000, batch_size=512,
                  eps=0.1, safe_t=1e-2, device='cpu'):
+    """Train LightSBB with an auxiliary inverse model.
+
+    This routine alternates between:
+    1) updating the bridge model drift, and
+    2) updating the inverse network used to pull samples into bridge space.
+
+    Args:
+        sampler_x: Source sampler exposing ``sample(batch_size)``.
+        sampler_y: Target sampler exposing ``sample(batch_size)``.
+        model: ``LightSBM`` instance.
+        model_inv: Inverse network (typically ``MLP_network``).
+        beta: Correction coefficient used in inverse consistency updates.
+        K: Number of outer bridge refinement stages.
+        lr: Learning rate for both optimizers.
+        n_epochs: Base epochs per stage before decay schedule.
+        batch_size: Minibatch size.
+        eps: Diffusion variance scale.
+        safe_t: Margin to avoid numerical instability at ``t=1``.
+        device: Training device.
+
+    Returns:
+        Tuple ``(model, model_inv)`` in evaluation mode.
+    """
     optimizer = optim.Adam(model.parameters(), lr=lr)
     optimizer_inv = optim.Adam(model_inv.parameters(), lr=lr)
 

@@ -4,8 +4,29 @@ import torch.optim as optim
 import numpy as np
 
 
+"""Training loop for LightSBB in the large-beta regime."""
+
+
 def training_sbb_beta_large(sampler_x, sampler_y, model, beta, K, lr=1e-3, n_epochs=10000, batch_size=512, eps=0.1, 
                             safe_t=1e-2, device='cpu'):
+    """Train LightSBB when beta is large enough to avoid learning an inverse map.
+
+    Args:
+        sampler_x: Source sampler exposing ``sample(batch_size)``.
+        sampler_y: Target sampler exposing ``sample(batch_size)``.
+        model: ``LightSBM`` instance to optimize.
+        beta: Correction coefficient used for latent updates.
+        K: Number of outer bridge refinement stages.
+        lr: Optimizer learning rate.
+        n_epochs: Base epochs per stage before decay schedule.
+        batch_size: Minibatch size.
+        eps: Diffusion variance scale.
+        safe_t: Margin to avoid numerical instability at ``t=1``.
+        device: Training device.
+
+    Returns:
+        Trained ``model`` in evaluation mode.
+    """
     optimizer = optim.Adam(model.parameters(), lr=lr)
     model.train()
 
