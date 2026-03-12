@@ -87,6 +87,11 @@ class GeneratorTwoD:
         """Sample the benchmark eight-Gaussians dataset variant."""
         return self.eight_normal_sample(n, scale=5, var=0.1).float()
 
+    def sample_moons(self, n):
+        """Sample moons dataset."""
+       x0, _ = generate_moons(n, noise=0.2)
+       return x0 * 3 - 1
+
 
 def wasserstein(
         x0: torch.Tensor,

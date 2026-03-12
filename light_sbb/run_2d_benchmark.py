@@ -18,7 +18,7 @@ np.random.seed(SEED)
 print(f'SEED: {SEED}')
 
 
-dataset = "N8G"
+dataset = "M8G"
 
 if dataset == "M8G":
     X_sampler, Y_sampler = (GeneratorTwoD("moons", dim, device),
