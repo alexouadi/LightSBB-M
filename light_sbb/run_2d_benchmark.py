@@ -26,12 +26,15 @@ if dataset == "M8G":
                             )
     eps = 5
     beta = 100
+    
 elif dataset == "N8G":
     X_sampler, Y_sampler = (GeneratorTwoD("normal", dim, device),
                             GeneratorTwoD("8gaussians", dim, device),
                             )
     eps = 1
     beta = 10
+    K = 25
+    
 else:  # NM
     X_sampler, Y_sampler = (GeneratorTwoD("normal", dim, device),
                             GeneratorTwoD("moons", dim, device),
