@@ -10,7 +10,7 @@ dim = 2
 n_potentials = 50
 S_init = 0.1
 batch_size = 512
-K = 10
+K = 5
 
 SEED = np.random.randint(0, 100000)
 torch.manual_seed(SEED)
@@ -33,6 +33,7 @@ elif dataset == "N8G":
                             )
     eps = 1
     beta = 10
+    K = 15
     
 else:  # NM
     X_sampler, Y_sampler = (GeneratorTwoD("normal", dim, device),
@@ -40,7 +41,6 @@ else:  # NM
                             )
     eps = 1
     beta = 100
-    K = 25
 
 path = f'b{beta}_{dataset}_e{eps}.pkl'
 print(path)
