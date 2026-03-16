@@ -6,6 +6,7 @@ from alae.alae_ffhq_inference import decode
 import ot as pot
 from functools import partial
 from typing import Optional
+from torchdyn.datasets import generate_moons
 from torch.distributions.multivariate_normal import MultivariateNormal
 
 
