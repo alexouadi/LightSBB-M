@@ -18,7 +18,7 @@ np.random.seed(SEED)
 print(f'SEED: {SEED}')
 
 
-dataset = "M8G"
+dataset = "N8G"
 
 if dataset == "M8G":
     X_sampler, Y_sampler = (GeneratorTwoD("moons", dim, device),
@@ -97,5 +97,5 @@ else:
     X_T_sbb = model(X_0)
 
 print()
-print(wasserstein(X_T_sbb, X_T))
+print(f'Final result for seed = {SEED}: wasserstein(X_T_sbb, X_T)')
 print(path, device, SEED)

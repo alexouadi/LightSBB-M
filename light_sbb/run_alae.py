@@ -80,8 +80,8 @@ model.to(device)
 
 if beta >= 100:
     model = training_sbb_beta_large(
-        X_sampler, Y_sampler, model, beta, K=K, n_epochs=15000, batch_size=batch_size, lr=1e-3, eps=eps, safe_t=1e-2,
-        device=device
+        X_sampler, Y_sampler, model, beta, K=K, n_epochs=15000, min_epoch=5000, batch_size=batch_size,
+        lr=1e-3, eps=eps, safe_t=1e-2, device=device
     )
 
 else:
@@ -93,7 +93,7 @@ else:
     model_inv.to(device)
 
     model, model_inv = training_sbb(
-        X_sampler, Y_sampler, model, model_inv, beta, K=K, n_epochs=10000, batch_size=batch_size,
+        X_sampler, Y_sampler, model, model_inv, beta, K=K, n_epochs=10000, min_epoch=5000, batch_size=batch_size,
         lr=1e-3, eps=eps, safe_t=1e-2, device=device
     )
     
