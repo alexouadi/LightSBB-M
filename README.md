@@ -53,6 +53,15 @@ If needed, install extra dependencies explicitly:
 pip install pillow pytorch-fid
 ```
 
+
+To export PNG folders for the full test split (all child test images + all adult→child SBB translations):
+```bash
+python light_sbb/export_alae_test_images.py --beta 1 --eps 0.1
+```
+This creates:
+- `real_child_test/00001.png, 00002.png, ...`
+- `sbb_child_test/00001.png, 00002.png, ...`
+
 ## Bibtex
 
 ```bibtex
