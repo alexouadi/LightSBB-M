@@ -37,6 +37,22 @@ You can use the implemented functions directly by importing them into your scrip
 jupyter alae_experiments.ipynb
 ```
 
+
+### Quantitative metrics for the ALAE translation task
+After training and generating translations, you can compute:
+- **Balanced accuracy** of a discriminator (`real child` vs `generated child`) on the **test split**.
+- **FID** between generated child images and real child test images.
+
+Run:
+```bash
+python light_sbb/compute_alae_metrics.py --beta 1 --eps 0.1
+```
+
+If needed, install extra dependencies explicitly:
+```bash
+pip install pillow pytorch-fid
+```
+
 ## Bibtex
 
 ```bibtex
