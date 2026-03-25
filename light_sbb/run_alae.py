@@ -20,9 +20,9 @@ dim = 512
 eps = 0.1
 n_potentials = 10
 S_init = 0.1
-beta = 1
+beta = 0.8
 batch_size = 512
-K = 2
+K = 5
 
 path = f"b{beta}_e{eps}.pkl"
 save_path = os.path.join("model",path)
@@ -80,7 +80,7 @@ model.to(device)
 
 if beta >= 100:
     model = training_sbb_beta_large(
-        X_sampler, Y_sampler, model, beta, K=K, n_epochs=15000, min_epoch=5000, batch_size=batch_size,
+        X_sampler, Y_sampler, model, beta, K=K, n_epochs=10000, min_epoch=5000, batch_size=batch_size,
         lr=1e-3, eps=eps, safe_t=1e-2, device=device
     )
 
