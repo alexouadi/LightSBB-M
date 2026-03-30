@@ -8,7 +8,16 @@ from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 
-def compute_cosine_similarity_between_folders(folder1, folder2):
+def compute_cosine_similarity(folder1, folder2):
+    """Compute cosine similarity for paired PNG images from two folders.
+
+    Args:
+        folder1: Path to folder 1.
+        folder2: Path to folder 2.
+
+    Returns:
+        Float similarity score.
+    """
     similarities = {}
     images1 = sorted([f for f in os.listdir(folder1) if f.endswith(".png")])
     images2 = sorted([f for f in os.listdir(folder2) if f.endswith(".png")])
@@ -41,6 +50,14 @@ def compute_cosine_similarity_between_folders(folder1, folder2):
 
 
 def compute_average_age(folder_path):
+    """Estimate ages from PNG face images in a folder using InsightFace.
+    
+    Args:
+        folder1: Path to folder.
+    
+    Returns:
+        np.array of estimated ages for all images in folder.
+    """
     app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
     app.prepare(ctx_id=0)
 

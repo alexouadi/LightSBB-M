@@ -4,6 +4,9 @@ scipy
 torch==2.0.1
 geotorch
 numpy==1.23.5
+opencv-python
+Pillow
+insightface
 deeplake
 wandb
 matplotlib
