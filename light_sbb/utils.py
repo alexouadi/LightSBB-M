@@ -8,6 +8,7 @@ from functools import partial
 from typing import Optional
 from torchdyn.datasets import generate_moons
 from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.distributions import StudentT, Cauchy, Normal
 
 
 """Utility samplers and evaluation helpers for LightSBB experiments."""
@@ -35,6 +36,46 @@ class TensorSampler:
         ind = torch.tensor(np.random.choice(np.arange(self.tensor.shape[0]), size=size, replace=False),
                            device=self.device)
         return torch.clone(self.tensor[ind]).detach().to(self.device)
+
+
+class HeavyTailSampler1D:
+    """1D sampler for heavy-tail and light-tail distributions used in the heavy-tail benchmark."""
+
+    HEAVY_TAIL_CHOICES = ('student_2', 'student_1', 'cauchy', 'pareto', 'lognormal')
+    SOURCE_CHOICES = ('gaussian', 'dirac')
+    ALL_CHOICES = HEAVY_TAIL_CHOICES + SOURCE_CHOICES
+
+    def __init__(self, distribution: str, device='cpu', scale: float = 1.0):
+        """Initialize for one of: ``student_2``, ``student_1``, ``cauchy``, ``pareto``, ``lognormal``, ``gaussian``, ``dirac``."""
+        if distribution not in self.ALL_CHOICES:
+            raise ValueError(
+                f"Unknown distribution '{distribution}'. "
+                f"Choose from: {self.ALL_CHOICES}"
+            )
+        self.distribution = distribution
+        self.device = device
+        self.scale = scale
+
+    def sample(self, n: int) -> torch.Tensor:
+        """Sample ``n`` points as a ``(n, 1)`` float32 tensor on ``self.device``."""
+        dist = self.distribution
+
+        if dist == 'student_2':
+            raw = StudentT(df=2).sample((n,)) * self.scale
+        elif dist in ('student_1', 'cauchy'):
+            raw = Cauchy(loc=0.0, scale=self.scale).sample((n,))
+        elif dist == 'pareto':
+            alpha = 1.5
+            u = torch.rand(n)
+            raw = ((1 - u) ** (-1.0 / alpha)) * self.scale
+        elif dist == 'lognormal':
+            raw = torch.distributions.LogNormal(loc=0.0, scale=2.0).sample((n,)) * self.scale
+        elif dist == 'gaussian':
+            raw = Normal(loc=0.0, scale=self.scale).sample((n,))
+        else:  # dirac
+            raw = torch.zeros(n)
+
+        return raw.unsqueeze(-1).float().to(self.device)
 
 
 class GeneratorTwoD:
