@@ -206,10 +206,15 @@ def plot_distributions(
                         color=c, alpha=0.22, linewidth=0, zorder=1)
 
         # --- KDE fill + line ---
-        for a, y, lbl, c in zip(cleaned, ys, labels, palette):
+        for i, (a, y, lbl, c) in enumerate(zip(cleaned, ys, labels, palette)):
             legend_label = f"{lbl}  (n={len(a):,})" if show_n else lbl
-            ax.fill_between(xs, y, alpha=fill_alpha, color=c, zorder=2)
-            ax.plot(xs, y, color=c, linewidth=linewidth, label=legend_label, zorder=3)
+            if i == 0:
+                # First array = target / real samples: dashed black, no fill
+                ax.plot(xs, y, color="black", linewidth=linewidth,
+                        linestyle="--", label=legend_label, zorder=3)
+            else:
+                ax.fill_between(xs, y, alpha=fill_alpha, color=c, zorder=2)
+                ax.plot(xs, y, color=c, linewidth=linewidth, label=legend_label, zorder=3)
 
         # --- optional Gaussian reference ---
         if show_gaussian_ref:
