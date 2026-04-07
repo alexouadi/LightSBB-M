@@ -94,6 +94,7 @@ def plot_distributions(
     colors: Optional[List[str]] = None,
     linewidth: float = 1.8,
     fill_alpha: float = 0.15,
+    grid: bool = True,
     figsize: Tuple[float, float] = (4.5, 3.0),
     fontsize: float = 9.0,
     # --- reference Gaussian overlay ---
@@ -237,6 +238,9 @@ def plot_distributions(
         ax.set_ylabel(ylabel)
 
         ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.3f"))
+
+        if grid:
+            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5, zorder=0)
 
         ax.legend(loc="best")
 
