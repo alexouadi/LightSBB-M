@@ -2,16 +2,18 @@
 plot_utils.py — publication-quality distribution comparison plots for LightSBB experiments.
 
 Primary entry point:
-    plot_distributions(arr1, arr2, ...)
+    plot_distributions(arrays, labels, ...)
 
-Typical usage — comparing two model configs on a heavy-tail target:
+Typical usage — comparing any number of distributions on the same axes:
     samples_a = np.load("samples_config_a.npy")
     samples_b = np.load("samples_config_b.npy")
-    plot_distributions(samples_a, samples_b,
-                       label1="LightSBB  β=10",
-                       label2="LightSBB  β=50",
-                       xlabel=r"$x$",
-                       savepath="comparison.pdf")
+    real      = np.load("real_data.npy")
+    plot_distributions(
+        [samples_a, samples_b, real],
+        ["LightSBB  β=10", "LightSBB  β=50", "Real data"],
+        xlabel=r"$x$",
+        savepath="comparison.pdf",
+    )
 """
 
 import numpy as np
@@ -19,7 +21,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from scipy.stats import gaussian_kde
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 
 # Colorblind-friendly palette (ColorBrewer RdBu + extras)
@@ -55,13 +57,12 @@ def _clean(arr: np.ndarray) -> np.ndarray:
 
 
 def _auto_xlim(
-    a1: np.ndarray,
-    a2: np.ndarray,
+    arrays: List[np.ndarray],
     quantile_clip: float,
 ) -> Tuple[float, float]:
-    """Derive x limits from joint empirical quantiles."""
-    lo = min(np.quantile(a1, quantile_clip / 2), np.quantile(a2, quantile_clip / 2))
-    hi = max(np.quantile(a1, 1 - quantile_clip / 2), np.quantile(a2, 1 - quantile_clip / 2))
+    """Derive x limits from joint empirical quantiles across all arrays."""
+    lo = min(np.quantile(a, quantile_clip / 2) for a in arrays)
+    hi = max(np.quantile(a, 1 - quantile_clip / 2) for a in arrays)
     pad = (hi - lo) * 0.06
     return lo - pad, hi + pad
 
@@ -71,12 +72,10 @@ def _auto_xlim(
 # ---------------------------------------------------------------------------
 
 def plot_distributions(
-    arr1: np.ndarray,
-    arr2: np.ndarray,
+    arrays: List[np.ndarray],
+    labels: List[str],
     *,
     # --- labels / legend ---
-    label1: str = "Config 1",
-    label2: str = "Config 2",
     show_n: bool = True,
     # --- axes ---
     xlabel: str = r"$x$",
@@ -92,8 +91,7 @@ def plot_distributions(
     # --- rug plot ---
     show_rug: bool = False,
     # --- appearance ---
-    color1: Optional[str] = None,
-    color2: Optional[str] = None,
+    colors: Optional[List[str]] = None,
     linewidth: float = 1.8,
     fill_alpha: float = 0.15,
     figsize: Tuple[float, float] = (4.5, 3.0),
@@ -107,15 +105,15 @@ def plot_distributions(
     show: bool = False,
     ax: Optional[plt.Axes] = None,
 ) -> plt.Figure:
-    """Plot KDE-estimated densities of two 1-D sample arrays on the same axes.
+    """Plot KDE-estimated densities of any number of 1-D sample arrays on the same axes.
 
     Parameters
     ----------
-    arr1, arr2 : array-like
+    arrays : list of array-like
         Sample arrays (any shape; flattened internally).  Non-finite values are
         silently dropped.
-    label1, label2 : str
-        Legend labels for each array.
+    labels : list of str
+        Legend labels, one per array.  Must have the same length as ``arrays``.
     show_n : bool
         Append ``(n=...)`` to each legend label (default True).
     xlabel, ylabel : str
@@ -137,9 +135,9 @@ def plot_distributions(
         Number of histogram bins (used only when ``show_hist=True``).
     show_rug : bool
         Draw a rug plot along the x-axis.
-    color1, color2 : str or None
-        Hex / named colours for each distribution.  Defaults to a
-        colorblind-friendly palette.
+    colors : list of str or None
+        Hex / named colours, one per array.  Defaults to a colorblind-friendly
+        palette (cycles if more arrays than colours are provided).
     linewidth : float
         KDE line width.
     fill_alpha : float
@@ -166,6 +164,12 @@ def plot_distributions(
     -------
     matplotlib.figure.Figure
     """
+    if len(arrays) != len(labels):
+        raise ValueError(
+            f"arrays and labels must have the same length "
+            f"(got {len(arrays)} arrays and {len(labels)} labels)."
+        )
+
     rc = {
         **_PAPER_RC,
         "font.size": fontsize,
@@ -177,21 +181,15 @@ def plot_distributions(
     }
 
     with plt.rc_context(rc):
-        c1 = color1 or _COLORS[0]
-        c2 = color2 or _COLORS[1]
-
-        a1 = _clean(arr1)
-        a2 = _clean(arr2)
+        cleaned = [_clean(a) for a in arrays]
+        palette = colors if colors is not None else _COLORS
 
         if xlim is None:
-            xlim = _auto_xlim(a1, a2, quantile_clip)
+            xlim = _auto_xlim(cleaned, quantile_clip)
 
         xs = np.linspace(xlim[0], xlim[1], n_eval)
-
-        kde1 = gaussian_kde(a1, bw_method=bw_method)
-        kde2 = gaussian_kde(a2, bw_method=bw_method)
-        y1 = kde1(xs)
-        y2 = kde2(xs)
+        kdes = [gaussian_kde(a, bw_method=bw_method) for a in cleaned]
+        ys = [kde(xs) for kde in kdes]
 
         own_fig = ax is None
         if own_fig:
@@ -199,22 +197,18 @@ def plot_distributions(
         else:
             fig = ax.figure
 
-        lbl1 = f"{label1}  (n={len(a1):,})" if show_n else label1
-        lbl2 = f"{label2}  (n={len(a2):,})" if show_n else label2
-
         # --- histogram (optional, drawn first so KDE sits on top) ---
         if show_hist:
             bins = np.linspace(xlim[0], xlim[1], n_bins + 1)
-            ax.hist(a1, bins=bins, density=True,
-                    color=c1, alpha=0.22, linewidth=0, zorder=1)
-            ax.hist(a2, bins=bins, density=True,
-                    color=c2, alpha=0.22, linewidth=0, zorder=1)
+            for a, c in zip(cleaned, palette):
+                ax.hist(a, bins=bins, density=True,
+                        color=c, alpha=0.22, linewidth=0, zorder=1)
 
         # --- KDE fill + line ---
-        ax.fill_between(xs, y1, alpha=fill_alpha, color=c1, zorder=2)
-        ax.fill_between(xs, y2, alpha=fill_alpha, color=c2, zorder=2)
-        ax.plot(xs, y1, color=c1, linewidth=linewidth, label=lbl1, zorder=3)
-        ax.plot(xs, y2, color=c2, linewidth=linewidth, label=lbl2, zorder=3)
+        for a, y, lbl, c in zip(cleaned, ys, labels, palette):
+            legend_label = f"{lbl}  (n={len(a):,})" if show_n else lbl
+            ax.fill_between(xs, y, alpha=fill_alpha, color=c, zorder=2)
+            ax.plot(xs, y, color=c, linewidth=linewidth, label=legend_label, zorder=3)
 
         # --- optional Gaussian reference ---
         if show_gaussian_ref:
@@ -225,21 +219,16 @@ def plot_distributions(
 
         # --- rug plot (optional) ---
         if show_rug:
-            y_max = max(y1.max(), y2.max())
-            rug_offset = -0.025 * y_max
+            y_max = max(y.max() for y in ys)
             rug_height = 0.018 * y_max
-            a1_clipped = np.clip(a1, *xlim)
-            a2_clipped = np.clip(a2, *xlim)
-            ax.plot(a1_clipped,
-                    np.full_like(a1_clipped, rug_offset),
-                    marker="|", linestyle="none",
-                    color=c1, alpha=0.25, markersize=rug_height * 100,
-                    markeredgewidth=0.6, zorder=4)
-            ax.plot(a2_clipped,
-                    np.full_like(a2_clipped, rug_offset + rug_height * 0.5),
-                    marker="|", linestyle="none",
-                    color=c2, alpha=0.25, markersize=rug_height * 100,
-                    markeredgewidth=0.6, zorder=4)
+            for i, (a, c) in enumerate(zip(cleaned, palette)):
+                rug_offset = -0.025 * y_max - i * rug_height * 0.5
+                a_clipped = np.clip(a, *xlim)
+                ax.plot(a_clipped,
+                        np.full_like(a_clipped, rug_offset),
+                        marker="|", linestyle="none",
+                        color=c, alpha=0.25, markersize=rug_height * 100,
+                        markeredgewidth=0.6, zorder=4)
 
         # --- axes decoration ---
         ax.set_xlim(xlim)
