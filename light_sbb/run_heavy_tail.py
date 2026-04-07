@@ -29,21 +29,21 @@ dim = 1
 n_potentials = 50
 S_init = 0.1
 batch_size = 512
-K = 15
+K = 5
+eps = 1
+beta = 10
 
-SEED = np.random.randint(0, 100000)
+SEED = 42
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 print(f"SEED: {SEED}")
 
 # --- pick an experiment ---
 # mu_0  (source): 'gaussian' or 'dirac'
-# mu_T  (target): 'student_2', 'student_1', 'cauchy', 'pareto', 'lognormal'
+# mu_T  (target): 'student_2', 'student_1', 'cauchy', 'pareto'
 source_name = "gaussian"
 target_name = "student_2"
 
-eps = 1
-beta = 10
 
 X_sampler = HeavyTailSampler1D(source_name, device=device)
 Y_sampler = HeavyTailSampler1D(target_name, device=device)
@@ -118,9 +118,3 @@ out_path = f"samples_{experiment_tag}_seed{SEED}.npy"
 np.save(out_path, samples_np)
 print(f"\nSaved {n_samples} samples → {os.path.abspath(out_path)}")
 print(f"Array shape: {samples_np.shape}")
-
-
-# rng = np.random.default_rng(0)
-# samples_a = rng.standard_normal(1000)          # Gaussian
-# samples_b = t.rvs(df=2, size=1000, random_state=rng)  # Student-t(2)
-# plot_distributions(samples_a, samples_b, label1="Gaussian", label2="Student-t (df=2)")

@@ -41,12 +41,12 @@ class TensorSampler:
 class HeavyTailSampler1D:
     """1D sampler for heavy-tail and light-tail distributions used in the heavy-tail benchmark."""
 
-    HEAVY_TAIL_CHOICES = ('student_2', 'student_1', 'cauchy', 'pareto', 'lognormal')
+    HEAVY_TAIL_CHOICES = ('student_2', 'student_1', 'cauchy', 'pareto')
     SOURCE_CHOICES = ('gaussian', 'dirac')
     ALL_CHOICES = HEAVY_TAIL_CHOICES + SOURCE_CHOICES
 
     def __init__(self, distribution: str, device='cpu', scale: float = 1.0):
-        """Initialize for one of: ``student_2``, ``student_1``, ``cauchy``, ``pareto``, ``lognormal``, ``gaussian``, ``dirac``."""
+        """Initialize for one of: ``student_2``, ``student_1``, ``cauchy``, ``pareto``, ``gaussian``, ``dirac``."""
         if distribution not in self.ALL_CHOICES:
             raise ValueError(
                 f"Unknown distribution '{distribution}'. "
@@ -68,8 +68,6 @@ class HeavyTailSampler1D:
             alpha = 1.5
             u = torch.rand(n)
             raw = ((1 - u) ** (-1.0 / alpha)) * self.scale
-        elif dist == 'lognormal':
-            raw = torch.distributions.LogNormal(loc=0.0, scale=2.0).sample((n,)) * self.scale
         elif dist == 'gaussian':
             raw = Normal(loc=0.0, scale=self.scale).sample((n,))
         else:  # dirac
