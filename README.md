@@ -8,6 +8,12 @@ Contact: alexandre.alouadi@gmail.com; huyen.pham@polytechnique.edu
 
 If you notice any errors or have suggestions for improvement, please feel free to reach out to us.
 
+## Adult → Child Face Translation Across β Values
+
+Comparison between our framework **SBB** and the benchmark **LightSB-M** on the unpaired image-to-image translation task (*adult* → *child* faces from FFHQ), for several values of the interpolation parameter β. As β increases, the transport interpolates from pure drift (Schrödinger Bridge) toward pure volatility (Bass martingale transport).
+
+![Adult to child face translation comparison between SBB and LightSB-M for several β values](illustration_alae.png)
+
 ## Abstract
 The Schrödinger Bridge and Bass (SBB) formulation, which jointly controls drift and volatility, is an established extension of the classical Schrödinger Bridge (SB).  Building on this framework, we introduce **LightSBB‑M**, an algorithm that computes the optimal SBB transport plan in only a few iterations. The method exploits a dual representation of the SBB objective to obtain analytic expressions for the optimal drift and volatility, and it incorporates a tunable parameter β > 0 that interpolates between pure drift (the Schrödinger  Bridge) and pure volatility (Bass martingale transport). We show that LightSBB‑M achieves the lowest 2‑Wasserstein distance on synthetic datasets against state‑of‑the‑art Schrödinger  Bridge and diffusion baselines with up to 32% improvement. We also illustrate the generative capability of the framework on an unpaired image‑to‑image translation task (*adult* → *child* faces in FFHQ). These findings demonstrate that **LightSBB‑M** provides a scalable, high‑fidelity SBB solver that outperforms existing SB and diffusion baselines across both synthetic and real‑world generative tasks.
 
