@@ -129,8 +129,8 @@ class GeneratorTwoD:
 
     def sample_moons(self, n):
         """Sample moons dataset."""
-       x0, _ = generate_moons(n, noise=0.2)
-       return x0 * 3 - 1
+        x0, _ = generate_moons(n, noise=0.2)
+        return x0 * 3 - 1
 
 
 def wasserstein(

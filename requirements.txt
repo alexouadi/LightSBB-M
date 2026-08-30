@@ -12,3 +12,5 @@ wandb
 matplotlib
 tqdm
 jupyter
+torchvision
+pytorch-fid

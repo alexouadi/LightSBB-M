@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .idea/
 
+results/
+*.tar.gz
+.claude/settings.local.json
