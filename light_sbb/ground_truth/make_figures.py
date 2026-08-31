@@ -4,11 +4,12 @@ Reads every metrics JSON and weight file under results/ground_truth/, writes the
 three-panel figure to figures/ground_truth/ and the booktabs table to
 results/ground_truth/table.tex.
 
-Run from inside light_sbb/:  python make_figures.py
+Run from inside light_sbb/ground_truth/:  python make_figures.py
 """
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -16,13 +17,15 @@ import numpy as np
 import torch
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # noqa: E402
 
-import gaussian_ground_truth as gt
-from control_extraction import SAFE_T, bridge_y, drift_x, sigma_x
-from lightsbm import LightSBM
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-ROOT = Path(__file__).resolve().parents[1]
+import gaussian_ground_truth as gt  # noqa: E402
+from control_extraction import SAFE_T, bridge_y, drift_x, sigma_x  # noqa: E402
+from lightsbm import LightSBM  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = ROOT / "results" / "ground_truth"
 FIGURES_DIR = ROOT / "figures" / "ground_truth"
 

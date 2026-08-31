@@ -4,28 +4,31 @@ Trains LightSBB on N(0, I2) -> N(0, diag(10, 0.1)) for each beta, then reports m
 A-D against the exact solution: plan SW2, cross-covariance error, objective gap, and
 drift/volatility recovery. 
 
-Run from inside light_sbb/:  python run_ground_truth.py
+Run from inside light_sbb/ground_truth/:  python run_ground_truth.py
 Results, weights and (X_0, X_1) pairs are archived to a single .tar.gz at the repo root.
 """
 
 import argparse
 import json
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 import torch
 
-import baseline_lightsb as bl
-import gaussian_ground_truth as gt
-import plan_metrics as pm
-from control_extraction import encode_y
-from lightsbm import LightSBM, MLP_network
-from train_lightsbb import training_sbb
-from train_lightsbb_beta_large import training_sbb_beta_large
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-ROOT = Path(__file__).resolve().parents[1]
+import baseline_lightsb as bl  # noqa: E402
+import gaussian_ground_truth as gt  # noqa: E402
+import plan_metrics as pm  # noqa: E402
+from control_extraction import encode_y  # noqa: E402
+from lightsbm import LightSBM, MLP_network  # noqa: E402
+from train_lightsbb import training_sbb  # noqa: E402
+from train_lightsbb_beta_large import training_sbb_beta_large  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[2]
 RESULTS_SUBDIR = "results/ground_truth"
 LARGE_BETA = 100.0
 SAFE_T = 1e-2
