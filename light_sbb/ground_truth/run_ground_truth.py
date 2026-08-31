@@ -34,19 +34,31 @@ LARGE_BETA = 100.0
 SAFE_T = 1e-2
 
 
-def run_dir(beta, seed, K):
+def run_dir(beta, seed, K, args=None):
     """Return the folder holding one run's outputs, creating it if needed.
+
+    Runs that depart from the default training settings get those appended to the leaf
+    name, so a sweep over safe_t or the net widths cannot overwrite the default run.
 
     Args:
         beta: SBB volatility penalty, or None for the beta-free baseline.
         seed: run seed.
         K: number of outer iterations.
+        args: parsed CLI arguments, or None to name the folder by (beta, seed, K) alone.
 
     Returns:
-        Path to results/ground_truth/<beta_x|lightsb>/seed_<s>/K_<k>/.
+        Path to results/ground_truth/<beta_x|lightsb>/seed_<s>/K_<k>[_tag]/.
     """
     family = "lightsb" if beta is None else f"beta_{beta:g}"
-    path = ROOT / RESULTS_SUBDIR / family / f"seed_{seed}" / f"K_{K}"
+    leaf = f"K_{K}"
+    if args is not None:
+        for name, value, default in (("st", args.safe_t, SAFE_T),
+                                     ("si", args.s_init, 0.1),
+                                     ("tm", args.t_model, 8),
+                                     ("dm", args.d_model, 32)):
+            if value != default:
+                leaf += f"_{name}{value:g}"
+    path = ROOT / RESULTS_SUBDIR / family / f"seed_{seed}" / leaf
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -74,7 +86,7 @@ def train(x_sampler, y_sampler, beta, args, device):
 
     shared = dict(K=args.K, n_epochs=args.n_epochs, min_epoch=args.min_epoch,
                   batch_size=args.batch_size, lr=args.lr, eps=args.eps,
-                  safe_t=SAFE_T, print_every=args.print_every, device=device)
+                  safe_t=args.safe_t, print_every=args.print_every, device=device)
 
     if beta >= LARGE_BETA:
         return training_sbb_beta_large(x_sampler, y_sampler, model, beta, **shared), None
@@ -83,7 +95,7 @@ def train(x_sampler, y_sampler, beta, args, device):
     return training_sbb(x_sampler, y_sampler, model, model_inv, beta, **shared)
 
 
-def generate_pairs(model, model_inv, x_sampler, beta, n, device):
+def generate_pairs(model, model_inv, x_sampler, beta, n, device, safe_t=SAFE_T):
     """Sample (X_0, X_hat_1) pairs and the Y-space endpoints the metrics need.
 
     Args:
@@ -93,15 +105,16 @@ def generate_pairs(model, model_inv, x_sampler, beta, n, device):
         beta: SBB volatility penalty.
         n: number of pairs.
         device: torch device.
+        safe_t: margin keeping the terminal time away from the singularity at t = 1.
 
     Returns:
         (pairs, y_0, y_T) with pairs of shape (n, 4).
     """
     x_0 = x_sampler.sample(n)
-    y_0 = encode_y(model, model_inv, x_0, 0.0, beta, safe_t=SAFE_T)
+    y_0 = encode_y(model, model_inv, x_0, 0.0, beta, safe_t=safe_t)
     y_T = model(y_0)
 
-    t_T = torch.full((n,), 1.0 - SAFE_T, device=device)
+    t_T = torch.full((n,), 1.0 - safe_t, device=device)
     x_1 = (y_T + model.get_drift(t_T, y_T) / beta).detach()
     return torch.cat([x_0, x_1], dim=1).cpu().numpy(), y_0, y_T
 
@@ -118,7 +131,7 @@ def train_baseline(x_sampler, y_sampler, args, device):
     return training_sbb_beta_large(
         x_sampler, y_sampler, model, beta=1.0, K=1, n_epochs=args.n_epochs,
         min_epoch=args.min_epoch, batch_size=args.batch_size, lr=args.lr, eps=args.eps,
-        safe_t=SAFE_T, print_every=args.print_every, device=device)
+        safe_t=args.safe_t, print_every=args.print_every, device=device)
 
 
 def generate_pairs_baseline(model, x_sampler, n):
@@ -166,7 +179,7 @@ def run_baseline(betas, seed, args, device):
     model.eval()
     pairs, y_0, y_T = generate_pairs_baseline(model, x_sampler, args.n_eval)
 
-    out = run_dir(None, seed, 1)
+    out = run_dir(None, seed, 1, args)
     np.save(out / "pairs.npy", pairs)
     torch.save({"model": model.state_dict(), "seed": seed, "eps": args.eps,
                 "n_potentials": args.n_potentials}, out / "weights.pt")
@@ -202,14 +215,16 @@ def run_one(beta, seed, args, device):
     train_time = time.time() - started
 
     model.eval()
-    pairs, y_0, y_T = generate_pairs(model, model_inv, x_sampler, beta, args.n_eval, device)
+    pairs, y_0, y_T = generate_pairs(model, model_inv, x_sampler, beta, args.n_eval,
+                                     device, args.safe_t)
 
     metrics = pm.evaluate(model, pairs, y_0, y_T, beta, n_times=args.n_times,
                           sigma2=tuple(args.sigma2), eps=args.eps, seed=seed)
     metrics.update(beta=beta, seed=seed, K=args.K, method="lightsbb",
-                   train_time_s=round(train_time, 1))
+                   safe_t=args.safe_t, s_init=args.s_init, t_model=args.t_model,
+                   d_model=args.d_model, train_time_s=round(train_time, 1))
 
-    out = run_dir(beta, seed, args.K)
+    out = run_dir(beta, seed, args.K, args)
     np.save(out / "pairs.npy", pairs)
     torch.save({"model": model.state_dict(),
                 "model_inv": None if model_inv is None else model_inv.state_dict(),
@@ -248,6 +263,8 @@ def main():
     p.add_argument("--t-model", type=int, default=8, help="inverse-net time encoder width")
     p.add_argument("--d-model", type=int, default=32, help="inverse-net sample encoder width")
     p.add_argument("--s-init", type=float, default=0.1)
+    p.add_argument("--safe-t", type=float, default=SAFE_T,
+                   help="margin keeping training and evaluation away from t = 1")
     p.add_argument("--batch-size", type=int, default=512)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--n-epochs", type=int, default=20000)
