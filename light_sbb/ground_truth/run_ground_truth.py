@@ -53,6 +53,8 @@ def run_dir(beta, seed, K, args=None):
     leaf = f"K_{K}"
     if args is not None:
         for name, value, default in (("st", args.safe_t, SAFE_T),
+                                     ("et", args.eval_safe_t, None),
+                                     ("lb", args.large_beta, LARGE_BETA),
                                      ("si", args.s_init, 0.1),
                                      ("tm", args.t_model, 8),
                                      ("dm", args.d_model, 32)):
@@ -88,7 +90,7 @@ def train(x_sampler, y_sampler, beta, args, device):
                   batch_size=args.batch_size, lr=args.lr, eps=args.eps,
                   safe_t=args.safe_t, print_every=args.print_every, device=device)
 
-    if beta >= LARGE_BETA:
+    if beta >= args.large_beta:
         return training_sbb_beta_large(x_sampler, y_sampler, model, beta, **shared), None
 
     model_inv = MLP_network(input_dim=2, t_model=args.t_model, d_model=args.d_model).to(device)
@@ -215,14 +217,16 @@ def run_one(beta, seed, args, device):
     train_time = time.time() - started
 
     model.eval()
+    eval_safe_t = args.eval_safe_t if args.eval_safe_t is not None else args.safe_t
     pairs, y_0, y_T = generate_pairs(model, model_inv, x_sampler, beta, args.n_eval,
-                                     device, args.safe_t)
+                                     device, eval_safe_t)
 
     metrics = pm.evaluate(model, pairs, y_0, y_T, beta, n_times=args.n_times,
                           sigma2=tuple(args.sigma2), eps=args.eps, seed=seed)
     metrics.update(beta=beta, seed=seed, K=args.K, method="lightsbb",
-                   safe_t=args.safe_t, s_init=args.s_init, t_model=args.t_model,
-                   d_model=args.d_model, train_time_s=round(train_time, 1))
+                   safe_t=args.safe_t, eval_safe_t=eval_safe_t, large_beta=args.large_beta,
+                   s_init=args.s_init, t_model=args.t_model, d_model=args.d_model,
+                   train_time_s=round(train_time, 1))
 
     out = run_dir(beta, seed, args.K, args)
     np.save(out / "pairs.npy", pairs)
@@ -264,7 +268,11 @@ def main():
     p.add_argument("--d-model", type=int, default=32, help="inverse-net sample encoder width")
     p.add_argument("--s-init", type=float, default=0.1)
     p.add_argument("--safe-t", type=float, default=SAFE_T,
-                   help="margin keeping training and evaluation away from t = 1")
+                   help="margin keeping training away from t = 1")
+    p.add_argument("--eval-safe-t", type=float, default=None,
+                   help="margin used at evaluation time; defaults to --safe-t")
+    p.add_argument("--large-beta", type=float, default=LARGE_BETA,
+                   help="beta at or above which the inverse-net-free regime is used")
     p.add_argument("--batch-size", type=int, default=512)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--n-epochs", type=int, default=20000)
