@@ -2,8 +2,7 @@
 
 Trains LightSBB on N(0, I2) -> N(0, diag(10, 0.1)) for each beta, then reports metrics
 A-D against the exact solution: plan SW2, cross-covariance error, objective gap, and
-drift/volatility recovery. Answers the meta-review objection that only the terminal
-marginal was ever measured.
+drift/volatility recovery. 
 
 Run from inside light_sbb/:  python run_ground_truth.py
 Results, weights and (X_0, X_1) pairs are archived to a single .tar.gz at the repo root.
@@ -161,7 +160,10 @@ def main():
     rows = [run_one(beta, args, device) for beta in args.betas]
 
     out = ROOT / RESULTS_SUBDIR
-    with open(out / f"metrics_K{args.K}_seed{args.seed}.json", "w") as f:
+    # betas in the name: parallel per-beta runs share this folder and would otherwise
+    # overwrite each other's metrics.
+    tag = "-".join(f"{b:g}" for b in args.betas)
+    with open(out / f"metrics_b{tag}_K{args.K}_seed{args.seed}.json", "w") as f:
         json.dump(rows, f, indent=2)
 
     header = f"\n{'beta':>6} {'term SW2':>9} {'plan SW2':>9} {'cross-cov':>10} {'obj gap':>9} {'E_a':>8} {'E_b':>8}"
