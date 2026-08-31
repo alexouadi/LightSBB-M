@@ -1,7 +1,7 @@
 """Build the ground-truth figure and the paper table from the saved run results.
 
 Reads every metrics JSON and weight file under results/ground_truth/, writes the
-three-panel figure to figures/ground_truth/ and the booktabs table to
+control figure to figures/ground_truth/ and the booktabs table to
 results/ground_truth/table.tex.
 
 Run from inside light_sbb/ground_truth/:  python make_figures.py
@@ -227,7 +227,7 @@ def panel_sweep(ax, rows):
 
 
 def build_figure(rows, sigma2, device, n_times=41):
-    """Assemble the three-panel figure and save it.
+    """Assemble the control figure, one row per coordinate, and save it.
 
     Args:
         rows: metric rows.
@@ -239,11 +239,11 @@ def build_figure(rows, sigma2, device, n_times=41):
         Path to the saved figure.
     """
     times = np.linspace(0.0, 1.0 - SAFE_T, n_times)
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 3.8))
+    fig, axes = plt.subplots(2, 2, figsize=(9.5, 7.0))
 
-    panel_controls(axes[0], rows, times, "drift", 0, sigma2, device)
-    panel_controls(axes[1], rows, times, "vol", 0, sigma2, device)
-    panel_sweep(axes[2], rows)
+    for coord in range(len(sigma2)):
+        panel_controls(axes[coord, 0], rows, times, "drift", coord, sigma2, device)
+        panel_controls(axes[coord, 1], rows, times, "vol", coord, sigma2, device)
 
     fig.tight_layout()
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)

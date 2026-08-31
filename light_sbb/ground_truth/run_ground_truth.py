@@ -79,7 +79,7 @@ def train(x_sampler, y_sampler, beta, args, device):
     if beta >= LARGE_BETA:
         return training_sbb_beta_large(x_sampler, y_sampler, model, beta, **shared), None
 
-    model_inv = MLP_network(input_dim=2, t_model=8, d_model=32).to(device)
+    model_inv = MLP_network(input_dim=2, t_model=args.t_model, d_model=args.d_model).to(device)
     return training_sbb(x_sampler, y_sampler, model, model_inv, beta, **shared)
 
 
@@ -245,6 +245,8 @@ def main():
     p.add_argument("--eps", type=float, default=1.0)
     p.add_argument("--sigma2", type=float, nargs=2, default=[10.0, 0.1])
     p.add_argument("--n-potentials", type=int, default=50)
+    p.add_argument("--t-model", type=int, default=8, help="inverse-net time encoder width")
+    p.add_argument("--d-model", type=int, default=32, help="inverse-net sample encoder width")
     p.add_argument("--s-init", type=float, default=0.1)
     p.add_argument("--batch-size", type=int, default=512)
     p.add_argument("--lr", type=float, default=1e-3)
