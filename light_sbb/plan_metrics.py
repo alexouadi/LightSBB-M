@@ -96,6 +96,28 @@ def objective_gap(model, y_0, y_T, beta, times, sigma2=(10.0, 0.1), eps=1.0):
     return (objective(model, y_0, y_T, beta, times, eps) - j_star) / abs(j_star)
 
 
+def drift_only_gap(model, y_0, y_T, beta, times, sigma2=(10.0, 0.1), eps=1.0):
+    """Objective gap counting the drift cost alone, on both sides.
+
+    The SB baseline pays no volatility cost, so its `objective_gap` is scored against
+    an inflated reference. This column drops that term everywhere, making the two
+    methods comparable on the drift alone.
+    """
+    ts, vals = [], []
+    for t in times:
+        t = clamp_t(t)
+        y_t = bridge_y(y_0, y_T, t, torch.as_tensor(eps, dtype=y_0.dtype, device=y_0.device))
+        t_vec = torch.full((len(y_t),), t, dtype=y_t.dtype, device=y_t.device)
+        a = drift_x(model, t_vec, y_t, beta).detach()
+        ts.append(t)
+        vals.append(float((a**2).sum(-1).mean()))
+
+    grid = np.asarray(ts, dtype=float)
+    j_star = sum(np.trapz(gt.drift_coeff(grid, r) ** 2 * gt.variance_path(grid, r, beta), grid)
+                 for r in gt.solution(beta, sigma2)["r"])
+    return (float(np.trapz(vals, ts)) - j_star) / abs(j_star)
+
+
 def control_errors(model, y_0, y_T, beta, times, sigma2=(10.0, 0.1), eps=1.0):
     """Relative recovery errors for the drift and the volatility (metric D).
 
@@ -179,6 +201,7 @@ def evaluate(model, pairs, y_0, y_T, beta, n_times=21, sigma2=(10.0, 0.1), eps=1
     out = {"plan_sw2": sliced_wasserstein(pairs, exact, seed=seed),
            "terminal_sw2": terminal_wasserstein(pairs[:, d:], exact[:, d:]),
            "cross_cov_err": cross_covariance_error(pairs, beta, sigma2),
-           "objective_gap": objective_gap(model, y_0, y_T, beta, times, sigma2, eps)}
+           "objective_gap": objective_gap(model, y_0, y_T, beta, times, sigma2, eps),
+           "drift_only_gap": drift_only_gap(model, y_0, y_T, beta, times, sigma2, eps)}
     out.update(control_errors(model, y_0, y_T, beta, times, sigma2, eps))
     return out

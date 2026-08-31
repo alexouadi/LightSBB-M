@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+import baseline_lightsb as bl
 import gaussian_ground_truth as gt
 import plan_metrics as pm
 from control_extraction import encode_y
@@ -28,6 +29,23 @@ ROOT = Path(__file__).resolve().parents[1]
 RESULTS_SUBDIR = "results/ground_truth"
 LARGE_BETA = 100.0
 SAFE_T = 1e-2
+
+
+def run_dir(beta, seed, K):
+    """Return the folder holding one run's outputs, creating it if needed.
+
+    Args:
+        beta: SBB volatility penalty, or None for the beta-free baseline.
+        seed: run seed.
+        K: number of outer iterations.
+
+    Returns:
+        Path to results/ground_truth/<beta_x|lightsb>/seed_<s>/K_<k>/.
+    """
+    family = "lightsb" if beta is None else f"beta_{beta:g}"
+    path = ROOT / RESULTS_SUBDIR / family / f"seed_{seed}" / f"K_{K}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 class GaussianSampler:
@@ -85,11 +103,93 @@ def generate_pairs(model, model_inv, x_sampler, beta, n, device):
     return torch.cat([x_0, x_1], dim=1).cpu().numpy(), y_0, y_T
 
 
-def run_one(beta, args, device):
-    """Train and evaluate a single beta, returning its metric row."""
-    print(f"\n{'=' * 70}\nbeta = {beta:g}   seed = {args.seed}   K = {args.K}\n{'=' * 70}")
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+def train_baseline(x_sampler, y_sampler, args, device):
+    """Train the LightSB-M baseline: the same loop at K = 1, where beta never enters."""
+    model = LightSBM(dim=2, n_potentials=args.n_potentials, epsilon=args.eps,
+                     S_diagonal_init=args.s_init, is_diagonal=True).to(device)
+
+    init_x = x_sampler.sample(args.n_potentials // 2)
+    init_y = y_sampler.sample(args.n_potentials - args.n_potentials // 2)
+    model.init_r_by_samples(torch.cat([init_x, init_y], dim=0))
+
+    return training_sbb_beta_large(
+        x_sampler, y_sampler, model, beta=1.0, K=1, n_epochs=args.n_epochs,
+        min_epoch=args.min_epoch, batch_size=args.batch_size, lr=args.lr, eps=args.eps,
+        safe_t=SAFE_T, print_every=args.print_every, device=device)
+
+
+def generate_pairs_baseline(model, x_sampler, n):
+    """Sample (X_0, X_hat_1) for the baseline, where the Bass map is the identity.
+
+    Args:
+        model: trained LightSBM.
+        x_sampler: source sampler.
+        n: number of pairs.
+
+    Returns:
+        (pairs, y_0, y_T) with pairs of shape (n, 4).
+    """
+    y_0 = x_sampler.sample(n)
+    y_T = model(y_0)
+    return torch.cat([y_0, y_T], dim=1).detach().cpu().numpy(), y_0, y_T
+
+
+def run_baseline(betas, seed, args, device):
+    """Train LightSB-M once and score it against every beta column.
+
+    The model has no beta, so one training serves all columns; only the reference it
+    is compared against changes.
+
+    Args:
+        betas: sequence of beta values to score against.
+        seed: run seed.
+        args: parsed CLI arguments.
+        device: torch device.
+
+    Returns:
+        List of metric rows, one per beta.
+    """
+    print(f"\n{'=' * 70}\nLightSB-M baseline (K = 1)   seed = {seed}\n{'=' * 70}")
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    x_sampler = GaussianSampler([1.0, 1.0], device)
+    y_sampler = GaussianSampler(args.sigma2, device)
+
+    started = time.time()
+    model = train_baseline(x_sampler, y_sampler, args, device)
+    train_time = time.time() - started
+
+    model.eval()
+    pairs, y_0, y_T = generate_pairs_baseline(model, x_sampler, args.n_eval)
+
+    out = run_dir(None, seed, 1)
+    np.save(out / "pairs.npy", pairs)
+    torch.save({"model": model.state_dict(), "seed": seed, "eps": args.eps,
+                "n_potentials": args.n_potentials}, out / "weights.pt")
+
+    rows = []
+    for beta in betas:
+        metrics = bl.evaluate(model, pairs, y_0, y_T, beta, n_times=args.n_times,
+                              sigma2=tuple(args.sigma2), eps=args.eps, seed=seed)
+        metrics.update(beta=beta, seed=seed, K=1, method="lightsb",
+                       train_time_s=round(train_time, 1))
+        print(f"\n  beta = {beta:g}")
+        print(f"    plan SW2 {metrics['plan_sw2']:.4f}   cross-cov {metrics['cross_cov_err']:.4f}"
+              f"   obj gap {metrics['objective_gap']:+.4f}"
+              f"   E_a {metrics['E_a']:.4f}   E_b {metrics['E_b']:.4f}")
+        rows.append(metrics)
+
+    with open(out / "metrics.json", "w") as f:
+        json.dump(rows, f, indent=2)
+    return rows
+
+
+def run_one(beta, seed, args, device):
+    """Train and evaluate a single (beta, seed), returning its metric row."""
+    print(f"\n{'=' * 70}\nbeta = {beta:g}   seed = {seed}   K = {args.K}\n{'=' * 70}")
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
     x_sampler = GaussianSampler([1.0, 1.0], device)
     y_sampler = GaussianSampler(args.sigma2, device)
@@ -102,17 +202,19 @@ def run_one(beta, args, device):
     pairs, y_0, y_T = generate_pairs(model, model_inv, x_sampler, beta, args.n_eval, device)
 
     metrics = pm.evaluate(model, pairs, y_0, y_T, beta, n_times=args.n_times,
-                          sigma2=tuple(args.sigma2), eps=args.eps, seed=args.seed)
-    metrics.update(beta=beta, seed=args.seed, K=args.K, train_time_s=round(train_time, 1))
+                          sigma2=tuple(args.sigma2), eps=args.eps, seed=seed)
+    metrics.update(beta=beta, seed=seed, K=args.K, method="lightsbb",
+                   train_time_s=round(train_time, 1))
 
-    out = ROOT / RESULTS_SUBDIR
-    out.mkdir(parents=True, exist_ok=True)
-    stem = f"b{beta:g}_K{args.K}_seed{args.seed}"
-    np.save(out / f"pairs_{stem}.npy", pairs)
+    out = run_dir(beta, seed, args.K)
+    np.save(out / "pairs.npy", pairs)
     torch.save({"model": model.state_dict(),
                 "model_inv": None if model_inv is None else model_inv.state_dict(),
-                "beta": beta, "K": args.K, "seed": args.seed, "eps": args.eps},
-               out / f"weights_{stem}.pt")
+                "beta": beta, "K": args.K, "seed": seed, "eps": args.eps,
+                "n_potentials": args.n_potentials},
+               out / "weights.pt")
+    with open(out / "metrics.json", "w") as f:
+        json.dump(metrics, f, indent=2)
 
     print(f"\n  plan SW2        {metrics['plan_sw2']:.4f}")
     print(f"  terminal SW2    {metrics['terminal_sw2']:.4f}")
@@ -134,7 +236,8 @@ def archive(name):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--betas", type=float, nargs="+", default=[2.0, 10.0, 100.0])
-    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--seeds", type=int, nargs="+", default=[42],
+                   help="one run per seed, each in its own results folder")
     p.add_argument("--K", type=int, default=5)
     p.add_argument("--eps", type=float, default=1.0)
     p.add_argument("--sigma2", type=float, nargs=2, default=[10.0, 0.1])
@@ -148,6 +251,10 @@ def main():
     p.add_argument("--n-eval", type=int, default=50000, help="pairs used for metrics A and B")
     p.add_argument("--n-times", type=int, default=21, help="quadrature nodes for C and D")
     p.add_argument("--device", default="cuda:0")
+    p.add_argument("--baseline", action="store_true",
+                   help="also train the LightSB-M baseline and score it against every beta")
+    p.add_argument("--baseline-only", action="store_true",
+                   help="train only the LightSB-M baseline, skipping LightSBB")
     p.add_argument("--archive-name", default="ground_truth")
     p.add_argument("--no-archive", action="store_true")
     args = p.parse_args()
@@ -157,20 +264,21 @@ def main():
     print(f"Reference J*: " + ", ".join(
         f"beta={b:g} -> {gt.solution(b, tuple(args.sigma2))['J_star']:.4f}" for b in args.betas))
 
-    rows = [run_one(beta, args, device) for beta in args.betas]
+    rows = []
+    for seed in args.seeds:
+        if not args.baseline_only:
+            rows += [run_one(beta, seed, args, device) for beta in args.betas]
+        if args.baseline or args.baseline_only:
+            rows += run_baseline(args.betas, seed, args, device)
 
-    out = ROOT / RESULTS_SUBDIR
-    # betas in the name: parallel per-beta runs share this folder and would otherwise
-    # overwrite each other's metrics.
-    tag = "-".join(f"{b:g}" for b in args.betas)
-    with open(out / f"metrics_b{tag}_K{args.K}_seed{args.seed}.json", "w") as f:
-        json.dump(rows, f, indent=2)
-
-    header = f"\n{'beta':>6} {'term SW2':>9} {'plan SW2':>9} {'cross-cov':>10} {'obj gap':>9} {'E_a':>8} {'E_b':>8}"
-    print(f"\n{'=' * 70}{header}")
+    # Each run already wrote its own metrics.json under its own folder, so parallel
+    # runs never share an output path.
+    header = (f"\n{'method':>9} {'beta':>6} {'seed':>5} {'term SW2':>9} {'plan SW2':>9} "
+              f"{'cross-cov':>10} {'obj gap':>9} {'E_a':>8} {'E_b':>8}")
+    print(f"\n{'=' * 84}{header}")
     for r in rows:
-        print(f"{r['beta']:>6g} {r['terminal_sw2']:>9.4f} {r['plan_sw2']:>9.4f} "
-              f"{r['cross_cov_err']:>10.4f} {r['objective_gap']:>+9.4f} "
+        print(f"{r['method']:>9} {r['beta']:>6g} {r['seed']:>5} {r['terminal_sw2']:>9.4f} "
+              f"{r['plan_sw2']:>9.4f} {r['cross_cov_err']:>10.4f} {r['objective_gap']:>+9.4f} "
               f"{r['E_a']:>8.4f} {r['E_b']:>8.4f}")
 
     if not args.no_archive:
