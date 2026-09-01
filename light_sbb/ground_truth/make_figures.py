@@ -32,7 +32,10 @@ FIGURES_DIR = ROOT / "figures" / "ground_truth"
 # Publication palette: one colour per beta, plus a neutral for the baseline.
 PALETTE = {2.0: "#0B5FA5", 10.0: "#C2410C", 100.0: "#15803D"}
 BASELINE_COLOR = "#6B7280"
-EXACT_STYLE = dict(color="#111827", linestyle="--", linewidth=1.4, zorder=3)
+EXACT_STYLE = dict(color="#111827", linestyle=(0, (5, 2)), linewidth=1.3, zorder=3)
+SB_STYLE = dict(color=BASELINE_COLOR, linestyle=(0, (1, 1.6)), linewidth=1.5, zorder=2)
+# beta -> infinity recovers the classical Schrodinger bridge; large enough to be exact here.
+SB_BETA = 1e6
 
 METRIC_COLUMNS = [("terminal_sw2", "terminal $SW_2$"), ("plan_sw2", "plan $SW_2$"),
                   ("cross_cov_err", "cross-cov."), ("objective_gap", "obj. gap"),
@@ -54,8 +57,42 @@ def load_rows(results_dir=RESULTS_DIR):
             loaded = json.load(f)
         for r in loaded if isinstance(loaded, list) else [loaded]:
             r["run_dir"] = str(path.parent)
+            r["variant"] = path.parent.name
             rows.append(r)
     return rows
+
+
+def select(rows, betas=None, variants=None):
+    """Keep the rows a figure or table should be built from.
+
+    Runs that share (method, beta, K) but differ in training settings live in sibling
+    folders, so the folder leaf is what distinguishes them.
+
+    Args:
+        rows: metric rows from `load_rows`.
+        betas: betas to keep, or None for all.
+        variants: run-folder leaves to keep for the LightSBB rows, or None to keep all.
+
+    Returns:
+        Filtered list of rows; baseline rows are never dropped by `variants`.
+    """
+    out = rows
+    if betas is not None:
+        keep = {float(b) for b in betas}
+        out = [r for r in out if r["beta"] in keep]
+    if variants is not None:
+        per_beta, plain = {}, set()
+        for v in variants:
+            if ":" in v:
+                b, leaf = v.split(":", 1)
+                per_beta[float(b)] = leaf
+            else:
+                plain.add(v)
+        out = [r for r in out
+               if r["method"] != "lightsbb"
+               or (r["variant"] == per_beta[r["beta"]] if r["beta"] in per_beta
+                   else r["variant"] in plain)]
+    return out
 
 
 def weights_for(rows, beta, method="lightsbb", k_ref=None):
@@ -140,7 +177,8 @@ def control_curves(model, beta, times, n=4096, sigma2=(10.0, 0.1), eps=1.0, seed
     return np.array(a_out), np.array(b_out)
 
 
-def panel_controls(ax, rows, times, kind, coord, sigma2, device, k_ref=None, eps=1.0):
+def panel_controls(ax, rows, times, kind, coord, sigma2, device, k_ref=None, eps=1.0,
+                   show_sb=True):
     """Draw learned vs exact controls for one coordinate on one axis.
 
     Args:
@@ -153,6 +191,7 @@ def panel_controls(ax, rows, times, kind, coord, sigma2, device, k_ref=None, eps
         device: torch device.
         k_ref: preferred K when several runs exist.
         eps: diffusion scale.
+        show_sb: draw the LightSB-M baseline curve.
     """
     betas = sorted({r["beta"] for r in rows if r["method"] == "lightsbb"})
     for beta in betas:
@@ -163,12 +202,24 @@ def panel_controls(ax, rows, times, kind, coord, sigma2, device, k_ref=None, eps
         a_hat, b_hat = control_curves(model, beta, times, sigma2=sigma2, eps=eps)
         learned = (a_hat if kind == "drift" else b_hat)[:, coord]
         ax.plot(times, learned, color=PALETTE.get(beta, "#444"), linewidth=1.8,
-                label=rf"$\beta = {beta:g}$ (learned)")
+                label="SBB")
 
         r = gt.solution(beta, sigma2)["r"][coord]
         exact = ([gt.drift_coeff(t, r) for t in times] if kind == "drift"
                  else [gt.vol_coeff(t, r, beta) for t in times])
         ax.plot(times, exact, **EXACT_STYLE)
+
+    # LightSB-M fixes sigma = sqrt(eps) I, so its volatility curve is flat at 1 by
+    # construction: that flatness is exactly what it cannot do otherwise.
+    sb_path, sb_row = weights_for(rows, betas[0] if betas else None, "lightsb")
+    if show_sb and sb_path is not None:
+        sb_model = load_model(sb_path, device=device)
+        a_sb, b_sb = control_curves(sb_model, SB_BETA, times, sigma2=sigma2, eps=eps)
+        ax.plot(times, (a_sb if kind == "drift" else b_sb)[:, coord], **SB_STYLE,
+                label="SB")
+
+    # One neutral entry stands for every SBB reference curve.
+    ax.plot([], [], **EXACT_STYLE, label="Real")
 
     ax.set_xlabel("$t$")
     ax.set_ylabel(rf"$a_{coord + 1}(t)$" if kind == "drift" else rf"$b_{coord + 1}(t)$")
@@ -226,7 +277,7 @@ def panel_sweep(ax, rows):
     ax.legend(fontsize=7, frameon=False)
 
 
-def build_figure(rows, sigma2, device, n_times=41):
+def build_figure(rows, sigma2, device, n_times=41, show_sb=True, stem="ground_truth"):
     """Assemble the control figure, one row per coordinate, and save it.
 
     Args:
@@ -234,6 +285,8 @@ def build_figure(rows, sigma2, device, n_times=41):
         sigma2: target marginal variances.
         device: torch device.
         n_times: resolution of the control curves.
+        show_sb: draw the LightSB-M baseline curve.
+        stem: output file stem, so several figures can coexist.
 
     Returns:
         Path to the saved figure.
@@ -242,16 +295,34 @@ def build_figure(rows, sigma2, device, n_times=41):
     fig, axes = plt.subplots(2, 2, figsize=(9.5, 7.0))
 
     for coord in range(len(sigma2)):
-        panel_controls(axes[coord, 0], rows, times, "drift", coord, sigma2, device)
-        panel_controls(axes[coord, 1], rows, times, "vol", coord, sigma2, device)
+        panel_controls(axes[coord, 0], rows, times, "drift", coord, sigma2, device,
+                       show_sb=show_sb)
+        panel_controls(axes[coord, 1], rows, times, "vol", coord, sigma2, device,
+                       show_sb=show_sb)
 
     fig.tight_layout()
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    path = FIGURES_DIR / "ground_truth.pdf"
+    path = FIGURES_DIR / f"{stem}.pdf"
     fig.savefig(path, bbox_inches="tight")
     fig.savefig(path.with_suffix(".png"), dpi=200, bbox_inches="tight")
     plt.close(fig)
     return path
+
+
+def _fmt(value, scale):
+    """Render one table cell, switching to scientific notation for small columns.
+
+    Args:
+        value: number to render.
+        scale: the column's mean, which decides the notation for the whole cell.
+
+    Returns:
+        LaTeX math string.
+    """
+    if not 0 < abs(scale) < 5e-3:
+        return f"{value:.3f}"
+    mantissa, exponent = f"{value:.1e}".split("e")
+    return rf"{mantissa}\!\times\!10^{{{int(exponent)}}}"
 
 
 def build_table(rows, k_ref=5):
@@ -278,7 +349,10 @@ def build_table(rows, k_ref=5):
                 mean, std, n = aggregate(rows, method, beta, key, k)
                 if not n:
                     break
-                cells.append(f"{mean:.3f}" + (rf"\,\pm\,{std:.3f}" if multi_seed and n > 1 else ""))
+                cell = _fmt(mean, mean)
+                if multi_seed and n > 1:
+                    cell += r"\,\pm\," + _fmt(std, mean)
+                cells.append(f"${cell}$")
             if not cells:
                 continue
             head = f"{beta:g}" if method == "lightsbb" else ""
@@ -298,17 +372,30 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--sigma2", type=float, nargs=2, default=[10.0, 0.1])
     p.add_argument("--k-ref", type=int, default=5, help="K used for the table rows")
+    p.add_argument("--betas", type=float, nargs="+", default=None,
+                   help="betas to include; default all")
+    p.add_argument("--variants", nargs="+", default=None,
+                   help="run-folder leaves selecting which LightSBB runs to report. "
+                        "Use beta:leaf to pin one beta (e.g. 10:K_5_lb10 100:K_5); "
+                        "default keeps every run found")
     p.add_argument("--n-times", type=int, default=41)
     p.add_argument("--device", default="cpu")
+    p.add_argument("--no-sb", action="store_true", help="omit the LightSB-M curve")
+    p.add_argument("--stem", default="ground_truth", help="output figure file stem")
     args = p.parse_args()
 
-    rows = load_rows()
+    rows = select(load_rows(), args.betas, args.variants)
     if not rows:
         raise SystemExit(f"No metrics_*.json under {RESULTS_DIR}")
+    kept = sorted({(r["method"], r["beta"], r["variant"]) for r in rows})
     print(f"Loaded {len(rows)} rows from {RESULTS_DIR}")
+    for method, beta, variant in kept:
+        n = sum(1 for r in rows if (r["method"], r["beta"], r["variant"]) == (method, beta, variant))
+        print(f"  {method:9s} beta={beta:<6g} {variant:<16s} {n} seed(s)")
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    fig_path = build_figure(rows, tuple(args.sigma2), device, args.n_times)
+    fig_path = build_figure(rows, tuple(args.sigma2), device, args.n_times,
+                            show_sb=not args.no_sb, stem=args.stem)
     tab_path = build_table(rows, args.k_ref)
     print(f"Figure -> {fig_path}")
     print(f"Table  -> {tab_path}")

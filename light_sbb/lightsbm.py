@@ -236,7 +236,6 @@ class MLP_network(torch.nn.Module):
 
         self.decoder = nn.Sequential(
             nn.Linear(d_model + t_model, min(d_model, t_model)),
-            # nn.LayerNorm(min(d_model, t_model)),
             nn.SiLU(),
             nn.Linear(min(d_model, t_model), input_dim)
         )
