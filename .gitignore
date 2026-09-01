@@ -7,3 +7,4 @@ results/
 *.tar.gz
 .claude/settings.local.json
 figures/
+artifacts/
