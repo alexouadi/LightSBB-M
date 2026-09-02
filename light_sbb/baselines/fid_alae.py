@@ -95,8 +95,12 @@ def main():
     p.add_argument("--n-reference", type=int, default=1000)
     p.add_argument("--batch-size", type=int, default=50)
     p.add_argument("--data-dir", default="data")
+    p.add_argument("--threads", type=int, default=8,
+                   help="CPU threads torch may use")
     p.add_argument("--device", default="cuda:0")
     args = p.parse_args()
+
+    torch.set_num_threads(args.threads)
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(device)

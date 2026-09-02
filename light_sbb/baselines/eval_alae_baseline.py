@@ -116,12 +116,13 @@ def main():
     p.add_argument("--decode-batch", type=int, default=8,
                    help="latents decoded per ALAE call; lower it if memory is tight")
     p.add_argument("--threads", type=int, default=8,
-                   help="CPU threads InsightFace and OpenCV may use")
+                   help="CPU threads torch, InsightFace and OpenCV may use")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--data-dir", default="data")
     p.add_argument("--device", default="cuda:3")
     args = p.parse_args()
 
+    torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
