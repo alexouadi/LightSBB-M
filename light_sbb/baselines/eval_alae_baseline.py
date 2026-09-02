@@ -115,6 +115,8 @@ def main():
     p.add_argument("--n-steps", type=int, default=100)
     p.add_argument("--decode-batch", type=int, default=8,
                    help="latents decoded per ALAE call; lower it if memory is tight")
+    p.add_argument("--threads", type=int, default=8,
+                   help="CPU threads InsightFace and OpenCV may use")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--data-dir", default="data")
     p.add_argument("--device", default="cuda:3")
@@ -149,7 +151,7 @@ def main():
     decode_to_folder(alae_model, x_0, input_folder, args.decode_batch)
     decode_to_folder(alae_model, x_1, output_folder, args.decode_batch)
 
-    ages = np.asarray(compute_average_age(output_folder))
+    ages = np.asarray(compute_average_age(output_folder, n_threads=args.threads))
     if len(ages) == 0:
         raise RuntimeError("no faces detected in any transported image")
     print(f"Age <= 18 (%): {100.0 * (ages <= 18).mean():.1f}")

@@ -2,9 +2,9 @@ import os
 
 import cv2
 import numpy as np
+import onnxruntime
 from PIL import Image
 from insightface.app import FaceAnalysis
-from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 
@@ -33,10 +33,12 @@ def compute_cosine_similarity(folder1, folder2):
         img1 = Image.open(path1).convert("RGB")
         img2 = Image.open(path2).convert("RGB")
 
-        vec1 = np.array(img1).flatten().reshape(1, -1)
-        vec2 = np.array(img2).flatten().reshape(1, -1)
+        # Flattened 1024x1024 RGB vectors are large, so the cosine is computed in
+        # float32 in place rather than through sklearn's float64 copies.
+        vec1 = np.asarray(img1, dtype=np.float32).ravel()
+        vec2 = np.asarray(img2, dtype=np.float32).ravel()
 
-        sim = cosine_similarity(vec1, vec2)[0][0]
+        sim = float(vec1 @ vec2 / (np.linalg.norm(vec1) * np.linalg.norm(vec2)))
         similarities[img_name1] = sim
         sim_values.append(sim)
 
@@ -49,16 +51,31 @@ def compute_cosine_similarity(folder1, folder2):
     return similarities
 
 
-def compute_average_age(folder_path):
+def compute_average_age(folder_path, n_threads=None):
     """Estimate ages from PNG face images in a folder using InsightFace.
-    
+
     Args:
         folder1: Path to folder.
-    
+        n_threads: Cap on CPU threads; None leaves ONNX Runtime and OpenCV free to
+            take every core, which starves a shared machine.
+
     Returns:
         np.array of estimated ages for all images in folder.
     """
-    app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+    session_options = None
+    if n_threads is not None:
+        # ONNX Runtime and OpenCV keep their own pools and ignore OMP_NUM_THREADS.
+        cv2.setNumThreads(n_threads)
+        session_options = onnxruntime.SessionOptions()
+        session_options.intra_op_num_threads = n_threads
+        session_options.inter_op_num_threads = n_threads
+
+    try:
+        app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'],
+                           session_options=session_options)
+    except TypeError:
+        # Older insightface builds do not forward session options.
+        app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
     app.prepare(ctx_id=0)
 
     ages = []
