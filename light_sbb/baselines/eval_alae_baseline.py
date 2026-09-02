@@ -57,7 +57,8 @@ def decode_to_folder(alae_model, latents, folder, batch_size=16):
                 Image.fromarray(img).save(os.path.join(folder, f"{start + offset:05d}.png"))
 
 
-def save_results(run_dir, args, ages, similarities, n_transported, checkpoint):
+def save_results(run_dir, args, ages, similarities, n_transported, checkpoint,
+                 fid=None, fid_n_images=None):
     """Write per-image scores and the summary metrics, then archive the run.
 
     Args:
@@ -67,6 +68,8 @@ def save_results(run_dir, args, ages, similarities, n_transported, checkpoint):
         similarities: Dict mapping image name to cosine similarity.
         n_transported: Number of held-out latents transported.
         checkpoint: Loaded checkpoint, recorded so the architecture is traceable.
+        fid: FID against the real child reference, omitted when not computed.
+        fid_n_images: Number of generated images the FID was computed on.
 
     Returns:
         Path to the written ``metrics.json``.
@@ -90,6 +93,11 @@ def save_results(run_dir, args, ages, similarities, n_transported, checkpoint):
         "architecture": {k: v for k, v in checkpoint.items()
                          if not isinstance(v, dict)},
     }
+
+    if fid is not None:
+        metrics["fid"] = float(fid)
+        metrics["fid_n_images"] = fid_n_images
+        metrics["fid_n_reference"] = args.n_reference
 
     metrics_path = run_dir / "metrics.json"
     with open(metrics_path, "w") as f:
@@ -119,8 +127,16 @@ def main():
                    help="CPU threads torch, InsightFace and OpenCV may use")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--data-dir", default="data")
+    p.add_argument("--no-fid", action="store_true",
+                   help="skip the FID pass, which decodes the reference set once")
+    p.add_argument("--n-reference", type=int, default=1000,
+                   help="real child faces the FID is measured against")
     p.add_argument("--device", default="cuda:3")
     args = p.parse_args()
+
+    # Imported here because fid_alae imports this module, so a module-level import
+    # would be circular.
+    from baselines.fid_alae import score_folder
 
     torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
@@ -159,8 +175,19 @@ def main():
 
     similarities = compute_cosine_similarity(input_folder, output_folder)
 
+    fid = fid_n_images = None
+    if not args.no_fid:
+        # Scored before the results are archived, so the tar carries the FID too.
+        fid, fid_n_images = score_folder(
+            output_folder, args.n_images, args.n_reference, args.data_dir, device,
+            alae_model=alae_model, decode_batch=args.decode_batch,
+        )
+        print(f"FID: {fid:.2f}  ({fid_n_images} generated vs "
+              f"{args.n_reference} reference)")
+
     run_dir = RESULTS_DIR / args.model / f"seed_{args.seed}"
-    print(save_results(run_dir, args, ages, similarities, len(x_0), checkpoint))
+    print(save_results(run_dir, args, ages, similarities, len(x_0), checkpoint,
+                       fid, fid_n_images))
 
 
 if __name__ == "__main__":

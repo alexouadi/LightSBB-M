@@ -56,13 +56,16 @@ def capped(folder, n_images):
         shutil.rmtree(tmp)
 
 
-def reference_folder(n_reference, data_dir, device):
+def reference_folder(n_reference, data_dir, device, alae_model=None,
+                     decode_batch=8):
     """Return the folder of decoded real child faces, decoding it once if missing.
 
     Args:
         n_reference: Number of held-out child latents to decode.
         data_dir: Directory holding the ALAE ``.npy`` files.
         device: Device the ALAE decoder runs on.
+        alae_model: Already loaded ALAE model, loaded here when omitted.
+        decode_batch: Latents decoded per ALAE call.
 
     Returns:
         Path to the reference folder.
@@ -77,10 +80,39 @@ def reference_folder(n_reference, data_dir, device):
         raise ValueError(f"only {len(y_inds_test)} held-out child latents available")
 
     latents = torch.tensor(splits["test_latents"][y_inds_test[:n_reference]])
-    alae_model = load_model(ALAE_CONFIG, training_artifacts_dir=ALAE_ARTIFACTS,
-                            device=device)
-    decode_to_folder(alae_model, latents, folder)
+    if alae_model is None:
+        alae_model = load_model(ALAE_CONFIG, training_artifacts_dir=ALAE_ARTIFACTS,
+                                device=device)
+    decode_to_folder(alae_model, latents, folder, decode_batch)
     return folder
+
+
+def score_folder(images, n_images, n_reference, data_dir, device, batch_size=50,
+                 alae_model=None, decode_batch=8):
+    """Compute FID for one decoded folder against the real child reference.
+
+    Args:
+        images: Folder of decoded PNGs to score.
+        n_images: Cap on generated images scored, or None for all of them.
+        n_reference: Number of real child faces in the reference set.
+        data_dir: Directory holding the ALAE ``.npy`` files.
+        device: Device the Inception network and the decoder run on.
+        batch_size: Images per Inception forward pass.
+        alae_model: Already loaded ALAE model, loaded here when omitted.
+        decode_batch: Latents decoded per ALAE call.
+
+    Returns:
+        Tuple of the FID and the number of generated images actually scored.
+    """
+    ref = reference_folder(n_reference, data_dir, device, alae_model, decode_batch)
+
+    with capped(images, n_images) as scored:
+        n_scored = len([f for f in os.listdir(scored) if f.endswith(".png")])
+        fid = calculate_fid_given_paths([str(scored), str(ref)],
+                                        batch_size=batch_size, device=device,
+                                        dims=DIMS)
+
+    return fid, n_scored
 
 
 def main():
@@ -105,13 +137,8 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(device)
 
-    ref_folder = reference_folder(args.n_reference, args.data_dir, device)
-
-    with capped(args.images, args.n_images) as scored:
-        n_scored = len([f for f in os.listdir(scored) if f.endswith(".png")])
-        fid = calculate_fid_given_paths([str(scored), str(ref_folder)],
-                                        batch_size=args.batch_size, device=device,
-                                        dims=DIMS)
+    fid, n_scored = score_folder(args.images, args.n_images, args.n_reference,
+                                 args.data_dir, device, args.batch_size)
 
     print(f"FID: {fid:.2f}  ({n_scored} generated vs {args.n_reference} reference)")
 
