@@ -56,12 +56,13 @@ def capped(folder, n_images):
         shutil.rmtree(tmp)
 
 
-def reference_folder(n_reference, data_dir):
+def reference_folder(n_reference, data_dir, device):
     """Return the folder of decoded real child faces, decoding it once if missing.
 
     Args:
         n_reference: Number of held-out child latents to decode.
         data_dir: Directory holding the ALAE ``.npy`` files.
+        device: Device the ALAE decoder runs on.
 
     Returns:
         Path to the reference folder.
@@ -76,7 +77,8 @@ def reference_folder(n_reference, data_dir):
         raise ValueError(f"only {len(y_inds_test)} held-out child latents available")
 
     latents = torch.tensor(splits["test_latents"][y_inds_test[:n_reference]])
-    alae_model = load_model(ALAE_CONFIG, training_artifacts_dir=ALAE_ARTIFACTS)
+    alae_model = load_model(ALAE_CONFIG, training_artifacts_dir=ALAE_ARTIFACTS,
+                            device=device)
     decode_to_folder(alae_model, latents, folder)
     return folder
 
@@ -99,7 +101,7 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(device)
 
-    ref_folder = reference_folder(args.n_reference, args.data_dir)
+    ref_folder = reference_folder(args.n_reference, args.data_dir, device)
 
     with capped(args.images, args.n_images) as scored:
         n_scored = len([f for f in os.listdir(scored) if f.endswith(".png")])

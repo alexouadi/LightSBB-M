@@ -41,6 +41,11 @@ def decode_to_folder(alae_model, latents, folder, batch_size=16):
     """
     os.makedirs(folder, exist_ok=True)
 
+    # Decoding dominates the run, so a folder left by an earlier eval is reused
+    # rather than rewritten. The shared input folder is the usual case.
+    if len(list(Path(folder).glob("*.png"))) == len(latents):
+        return
+
     with torch.no_grad():
         for start in tqdm(range(0, len(latents), batch_size)):
             batch = latents[start:start + batch_size]
@@ -108,6 +113,8 @@ def main():
     p.add_argument("--model", choices=sorted(BASELINES), default="otcfm")
     p.add_argument("--n-images", type=int, default=1000)
     p.add_argument("--n-steps", type=int, default=100)
+    p.add_argument("--decode-batch", type=int, default=8,
+                   help="latents decoded per ALAE call; lower it if memory is tight")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--data-dir", default="data")
     p.add_argument("--device", default="cuda:3")
@@ -134,12 +141,13 @@ def main():
     model = BASELINES[args.model].from_checkpoint(checkpoint, input_dim=DIM, device=device)
     x_1 = model.transport(x_0, n_steps=args.n_steps).cpu()
 
-    alae_model = load_model(ALAE_CONFIG, training_artifacts_dir=ALAE_ARTIFACTS)
+    alae_model = load_model(ALAE_CONFIG, training_artifacts_dir=ALAE_ARTIFACTS,
+                            device=device)
 
     input_folder = IMAGE_DIR / f"input_n{args.n_images}"
     output_folder = IMAGE_DIR / f"{args.model}_s{args.seed}_n{args.n_images}"
-    decode_to_folder(alae_model, x_0, input_folder)
-    decode_to_folder(alae_model, x_1, output_folder)
+    decode_to_folder(alae_model, x_0, input_folder, args.decode_batch)
+    decode_to_folder(alae_model, x_1, output_folder, args.decode_batch)
 
     ages = np.asarray(compute_average_age(output_folder))
     if len(ages) == 0:

@@ -8,7 +8,7 @@ import torch
 import os
 
 
-def load_model(default_config, training_artifacts_dir):
+def load_model(default_config, training_artifacts_dir, device="cpu"):
     lreq.use_implicit_lreq.set(True)
 
     indices = [0, 1, 2, 3, 4, 10, 11, 17, 19]
@@ -94,6 +94,8 @@ def load_model(default_config, training_artifacts_dir):
 
     extra_checkpoint_data = checkpointer.load()
 
+    # The checkpoint is read onto the CPU, so the move happens once it is loaded.
+    model.to(device)
     model.eval()
 
     return model
@@ -112,10 +114,9 @@ def encode(model, x):
 
 
 def decode(model, x):
+    # The decoder is batch-safe (its noise is drawn per batch element), so the whole
+    # batch goes through in one call instead of one image at a time.
+    x = x.to(next(model.parameters()).device)
     x = x[:, None, :].repeat(1, model.mapping_f.num_layers, 1)
     layer_count = 9
-    decoded = []
-    for i in range(x.shape[0]):
-        r = model.decoder(x[i][None, ...], layer_count - 1, 1, noise=True)
-        decoded.append(r)
-    return torch.cat(decoded)
+    return model.decoder(x, layer_count - 1, 1, noise=True)
