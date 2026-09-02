@@ -13,7 +13,11 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+LIGHT_SBB = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(LIGHT_SBB))
+# ALAE's own modules import each other flatly ("from model import Model"), so its
+# package directory has to sit on the path as well.
+sys.path.insert(0, str(LIGHT_SBB / "alae"))
 
 from alae.alae_ffhq_inference import decode, load_model  # noqa: E402
 from baselines import BASELINES  # noqa: E402
