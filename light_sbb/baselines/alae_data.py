@@ -40,10 +40,14 @@ def load_alae_splits(data_dir):
     y_inds_train = np.arange(TRAIN_SIZE)[
         (train_age < 18).reshape(-1) * (train_age != -1).reshape(-1)
     ]
+    y_inds_test = np.arange(TEST_SIZE)[
+        (test_age < 18).reshape(-1) * (test_age != -1).reshape(-1)
+    ]
 
     return {
         "x_train": train_latents[x_inds_train],
         "y_train": train_latents[y_inds_train],
         "test_latents": test_latents,
         "x_inds_test": x_inds_test,
+        "y_inds_test": y_inds_test,
     }
