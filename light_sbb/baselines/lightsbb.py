@@ -40,13 +40,15 @@ class LightSBB:
         parser.add_argument("--print-every", type=int, default=PRINT_EVERY)
 
     def __init__(self, input_dim, beta=0.8, eps=0.1, n_potentials=10, s_init=0.1,
-                 device="cuda"):
+                 safe_t=1e-2, device="cuda"):
         """Build the bridge, and the inverse network the moderate-beta loop needs."""
         self.input_dim = input_dim
         self.beta = beta
         self.eps = eps
         self.n_potentials = n_potentials
         self.s_init = s_init
+        # The Bass map is evaluated at 1 - safe_t, where the drift stays finite.
+        self.safe_t = safe_t
         self.device = device
 
         self.model = LightSBM(dim=input_dim,
@@ -65,7 +67,8 @@ class LightSBB:
     def from_args(cls, input_dim, args, device="cuda"):
         """Build the baseline from parsed CLI arguments."""
         return cls(input_dim=input_dim, beta=args.beta, eps=args.eps,
-                   n_potentials=args.n_potentials, s_init=args.s_init, device=device)
+                   n_potentials=args.n_potentials, s_init=args.s_init,
+                   safe_t=args.safe_t, device=device)
 
     def train(self, X_sampler, Y_sampler, args):
         """Run the SBB training loop matching the beta regime.
@@ -94,10 +97,10 @@ class LightSBB:
     def transport(self, x_0, n_steps=None):
         """Map source latents to the target, following ``utils.sample_alae``.
 
-        The bridge acts on Y-space, so the source is pulled in first: through the
-        inverse network at moderate beta, through the drift correction above it.
-        The child is the bridge output itself, not the round trip back to X-space
-        that the plotting helper also returns.
+        Three steps. The source is pulled into Y-space, through the inverse network
+        at moderate beta and through the drift correction above it. The bridge is
+        applied there. The result is then pushed back to X-space by the Bass map at
+        t = 1 - safe_t, which is the image the notebook decodes and plots.
 
         Args:
             x_0: (n, input_dim) source latents.
@@ -109,18 +112,22 @@ class LightSBB:
         self.model.eval()
         x = x_0.to(self.device)
 
-        if self.model_inv is None:
-            t_0 = torch.zeros(len(x), device=self.device)
-            # get_drift differentiates through its own input, so it needs grad
-            # enabled even at inference.
-            with torch.enable_grad():
+        # get_drift differentiates through its own input, so both corrections need
+        # grad enabled even at inference.
+        with torch.enable_grad():
+            if self.model_inv is None:
+                t_0 = torch.zeros(len(x), device=self.device)
                 y_0 = (x - 1.0 / self.beta * self.model.get_drift(t_0, x)).detach()
-        else:
-            self.model_inv.eval()
-            t_0 = torch.zeros((len(x), 1), device=self.device)
-            y_0 = self.model_inv(t_0, x)
+            else:
+                self.model_inv.eval()
+                t_0 = torch.zeros((len(x), 1), device=self.device)
+                y_0 = self.model_inv(t_0, x)
 
-        return self.model(y_0)
+            y_mapped = self.model(y_0)
+
+            t_T = torch.full((len(y_mapped),), 1.0 - self.safe_t, device=self.device)
+            return (y_mapped
+                    + 1.0 / self.beta * self.model.get_drift(t_T, y_mapped)).detach()
 
     def checkpoint(self):
         """Return a picklable dict holding the weights and the architecture."""
@@ -130,6 +137,7 @@ class LightSBB:
             "eps": self.eps,
             "n_potentials": self.n_potentials,
             "s_init": self.s_init,
+            "safe_t": self.safe_t,
         }
         if self.model_inv is not None:
             state["state_dict_inv"] = {k: v.cpu()
@@ -141,7 +149,8 @@ class LightSBB:
         """Rebuild a trained baseline from ``checkpoint``."""
         model = cls(input_dim=input_dim, beta=checkpoint["beta"], eps=checkpoint["eps"],
                     n_potentials=checkpoint["n_potentials"],
-                    s_init=checkpoint["s_init"], device=device)
+                    s_init=checkpoint["s_init"], safe_t=checkpoint["safe_t"],
+                    device=device)
         model.model.load_state_dict(checkpoint["state_dict"])
         model.model.to(device)
 
