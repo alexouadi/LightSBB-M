@@ -59,7 +59,7 @@ def decode_to_folder(alae_model, latents, folder, batch_size=16):
 
 
 def save_results(run_dir, args, ages, similarities, n_transported, checkpoint,
-                 fid=None, fid_n_images=None):
+                 fid=None, fid_n_images=None, tag=None):
     """Write per-image scores and the summary metrics, then archive the run.
 
     Args:
@@ -71,6 +71,7 @@ def save_results(run_dir, args, ages, similarities, n_transported, checkpoint,
         checkpoint: Loaded checkpoint, recorded so the architecture is traceable.
         fid: FID against the real child reference, omitted when not computed.
         fid_n_images: Number of generated images the FID was computed on.
+        tag: Run tag, derived from ``args`` when omitted.
 
     Returns:
         Path to the written ``metrics.json``.
@@ -81,7 +82,7 @@ def save_results(run_dir, args, ages, similarities, n_transported, checkpoint,
     sims = np.array(list(similarities.values()))
     metrics = {
         "model": args.model,
-        "run_tag": run_tag(args),
+        "run_tag": tag or run_tag(args),
         "seed": args.seed,
         "n_transported": n_transported,
         "n_faces_detected": len(ages),
@@ -147,36 +148,43 @@ def parse_args():
     return p.parse_args()
 
 
-def main():
-    """Transport held-out adult latents, decode them, and record the metrics."""
-    args = parse_args()
+def load_source_latents(args):
+    """Return the held-out adult latents every method is evaluated on.
 
-    # Imported here because fid_alae imports this module, so a module-level import
-    # would be circular.
-    from baselines.fid_alae import score_folder
+    Args:
+        args: Parsed arguments carrying ``data_dir`` and ``n_images``.
 
-    torch.set_num_threads(args.threads)
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    print(device)
-
+    Returns:
+        (n_images, DIM) tensor of source latents, in the fixed held-out order.
+    """
     splits = load_alae_splits(args.data_dir)
     x_inds_test = splits["x_inds_test"]
     if args.n_images > len(x_inds_test):
         raise ValueError(f"only {len(x_inds_test)} held-out source latents available")
 
-    inds = x_inds_test[:args.n_images]
-    x_0 = torch.tensor(splits["test_latents"][inds])
-    print(f"transporting {len(x_0)} held-out source latents")
+    return torch.tensor(splits["test_latents"][x_inds_test[:args.n_images]])
 
-    tag = run_tag(args)
-    with open(MODEL_DIR / f"{tag}_s{args.seed}.pkl", "rb") as f:
-        checkpoint = pickle.load(f)
 
-    model = BASELINES[args.model].from_checkpoint(checkpoint, input_dim=DIM, device=device)
-    x_1 = model.transport(x_0, n_steps=args.n_steps).cpu()
+def score_transport(args, tag, x_0, x_1, checkpoint, device):
+    """Decode a transport, score it, and write the run's results.
+
+    Shared by every evaluation entry point so each row of the table is produced
+    by the same decoding, the same detector passes and the same FID reference.
+
+    Args:
+        args: Parsed arguments carrying the evaluation settings.
+        tag: Run tag naming the image folder and the results directory.
+        x_0: (n, DIM) source latents on CPU.
+        x_1: (n, DIM) transported latents on CPU.
+        checkpoint: Checkpoint dict, recorded so the architecture is traceable.
+        device: Device the decoder and Inception network run on.
+
+    Returns:
+        Path to the written ``metrics.json``.
+    """
+    # Imported here because fid_alae imports this module, so a module-level import
+    # would be circular.
+    from baselines.fid_alae import score_folder
 
     alae_model = load_model(ALAE_CONFIG, training_artifacts_dir=ALAE_ARTIFACTS,
                             device=device)
@@ -204,8 +212,32 @@ def main():
               f"{args.n_reference} reference)")
 
     run_dir = RESULTS_DIR / tag / f"seed_{args.seed}"
-    print(save_results(run_dir, args, ages, similarities, len(x_0), checkpoint,
-                       fid, fid_n_images))
+    return save_results(run_dir, args, ages, similarities, len(x_0), checkpoint,
+                        fid, fid_n_images, tag=tag)
+
+
+def main():
+    """Transport held-out adult latents, decode them, and record the metrics."""
+    args = parse_args()
+
+    torch.set_num_threads(args.threads)
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    print(device)
+
+    x_0 = load_source_latents(args)
+    print(f"transporting {len(x_0)} held-out source latents")
+
+    tag = run_tag(args)
+    with open(MODEL_DIR / f"{tag}_s{args.seed}.pkl", "rb") as f:
+        checkpoint = pickle.load(f)
+
+    model = BASELINES[args.model].from_checkpoint(checkpoint, input_dim=DIM, device=device)
+    x_1 = model.transport(x_0, n_steps=args.n_steps).cpu()
+
+    print(score_transport(args, tag, x_0, x_1, checkpoint, device))
 
 
 if __name__ == "__main__":
