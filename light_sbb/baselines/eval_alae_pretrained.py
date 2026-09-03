@@ -11,6 +11,7 @@ with the block the notebook uses before running this.
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -19,6 +20,30 @@ import torch
 LIGHT_SBB = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LIGHT_SBB))
 sys.path.insert(0, str(LIGHT_SBB / "alae"))
+
+
+def add_gmlab_root():
+    """Put the internal workarea root on the path so gmlab_env is importable.
+
+    gmlab_env and gmlab_utils sit at the root of the workarea rather than inside
+    this project, so running the script from the project directory does not reach
+    them. The enclosing directories are searched, which covers any checkout under
+    the workarea. Set GMLAB_ROOT when it lives somewhere else.
+
+    Returns:
+        The root that was added, or None when the workarea is not on this machine.
+    """
+    override = os.environ.get("GMLAB_ROOT")
+    candidates = [Path(override)] if override else list(LIGHT_SBB.parents)
+
+    for root in candidates:
+        if (root / "gmlab_env").is_dir():
+            sys.path.append(str(root))
+            return root
+    return None
+
+
+add_gmlab_root()
 
 from baselines.alae_data import DIM  # noqa: E402
 from baselines.eval_alae_baseline import (load_source_latents,  # noqa: E402
