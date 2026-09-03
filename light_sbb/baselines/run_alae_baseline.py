@@ -21,6 +21,8 @@ def parse_args():
     p.add_argument("--model", choices=sorted(BASELINES), default="otcfm")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--data-dir", default="data")
+    p.add_argument("--threads", type=int, default=8,
+                   help="CPU threads torch may use")
     p.add_argument("--device", default="cuda:3")
 
     known, _ = p.parse_known_args()
@@ -32,6 +34,7 @@ def main():
     """Train the requested baseline and pickle its checkpoint."""
     args = parse_args()
 
+    torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 

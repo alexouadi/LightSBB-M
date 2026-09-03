@@ -3,6 +3,11 @@
 Follows the reference implementation of Korotin et al. (ICLR 2023), keeping the
 max-min loop and hyperparameters of their weak notebook but swapping the image
 UNet/ResNet pair for the MLPs their low-dimensional notebook uses.
+
+Their notebooks always feed the networks unit-scale data (images mapped to
+[-1, 1], toy samplers wrapped in ``StandardNormalScaler``), which their learning
+rate and ``z_std`` are tuned for. ALAE latents are not on that scale, so they are
+standardized here and the transported output is mapped back.
 """
 
 import torch
@@ -27,6 +32,54 @@ def mlp(input_dim, output_dim, hidden, n_hidden=3):
         layers += [nn.Linear(hidden, hidden), nn.ReLU(True)]
     layers.append(nn.Linear(hidden, output_dim))
     return nn.Sequential(*layers)
+
+
+class Standardizer:
+    """Per-dimension z-score, fitted on the source and target latents jointly.
+
+    Both marginals share one transform so the quadratic cost stays comparable
+    across them, which a per-marginal fit would distort.
+    """
+
+    def __init__(self, mean, std):
+        """Store the (1, dim) statistics used to rescale latents."""
+        self.mean = mean
+        self.std = std
+
+    @classmethod
+    def identity(cls, device):
+        """Return a no-op transform, used until the statistics are fitted."""
+        return cls(torch.zeros(1, device=device), torch.ones(1, device=device))
+
+    @classmethod
+    def fit(cls, samples, device, eps=1e-6):
+        """Fit the statistics on a stack of latents.
+
+        Args:
+            samples: (n, dim) tensor of latents.
+            device: Device the statistics are placed on.
+            eps: Floor on the standard deviation, guarding constant dimensions.
+
+        Returns:
+            Fitted `Standardizer`.
+        """
+        samples = samples.to(device)
+        return cls(samples.mean(0, keepdim=True),
+                   samples.std(0, keepdim=True).clamp_min(eps))
+
+    def to(self, device):
+        """Move the statistics to ``device`` and return self."""
+        self.mean = self.mean.to(device)
+        self.std = self.std.to(device)
+        return self
+
+    def encode(self, x):
+        """Map latents into the standardized space."""
+        return (x - self.mean) / self.std
+
+    def decode(self, x):
+        """Map standardized values back to latent space."""
+        return x * self.std + self.mean
 
 
 def init_weights(module):
@@ -61,9 +114,15 @@ class NOT:
         self.z_dim = z_dim
         self.z_std = z_std
         self.device = device
+        # Replaced by the fitted transform in train(); the no-op keeps an
+        # untrained model callable.
+        self.standardizer = Standardizer.identity(device)
 
         self.T = mlp(input_dim + z_dim, input_dim, hidden).to(device)
         self.f = mlp(input_dim, 1, hidden).to(device)
+        # Their MLP notebook initializes both networks; only the image notebook
+        # leaves T alone, because there T is a UNet carrying its own scheme.
+        self.T.apply(init_weights)
         self.f.apply(init_weights)
 
     @classmethod
@@ -98,6 +157,9 @@ class NOT:
         if args.z_size < 2:
             raise ValueError("the weak cost needs at least two noise draws per point")
 
+        self.standardizer = Standardizer.fit(
+            torch.cat([X_sampler.tensor, Y_sampler.tensor]), self.device)
+
         T_opt = torch.optim.Adam(self.T.parameters(), lr=args.lr, weight_decay=1e-10)
         f_opt = torch.optim.Adam(self.f.parameters(), lr=args.lr, weight_decay=1e-10)
 
@@ -107,7 +169,8 @@ class NOT:
 
             self.f.requires_grad_(False)
             for _ in range(args.t_iters):
-                x = X_sampler.sample(args.batch_size).to(self.device)
+                x = self.standardizer.encode(
+                    X_sampler.sample(args.batch_size).to(self.device))
                 T_xz = self._push(x, args.z_size)
 
                 # The variance term is what makes the cost weak: it pays for diversity
@@ -123,8 +186,10 @@ class NOT:
                 T_opt.step()
 
             self.f.requires_grad_(True)
-            x = X_sampler.sample(args.batch_size).to(self.device)
-            y = Y_sampler.sample(args.batch_size).to(self.device)
+            x = self.standardizer.encode(
+                X_sampler.sample(args.batch_size).to(self.device))
+            y = self.standardizer.encode(
+                Y_sampler.sample(args.batch_size).to(self.device))
             with torch.no_grad():
                 T_xz = self._push(x, 1).squeeze(1)
 
@@ -146,7 +211,8 @@ class NOT:
             (n, input_dim) transported latents on ``self.device``.
         """
         self.T.eval()
-        return self._push(x_0.to(self.device), 1).squeeze(1)
+        x = self.standardizer.encode(x_0.to(self.device))
+        return self.standardizer.decode(self._push(x, 1).squeeze(1))
 
     def checkpoint(self):
         """Return a picklable dict holding the weights and the architecture."""
@@ -156,6 +222,10 @@ class NOT:
             "hidden": self.T[0].out_features,
             "z_dim": self.z_dim,
             "z_std": self.z_std,
+            # Nested so the eval script's architecture record, which keeps only
+            # the non-dict entries, does not pick up the two stat tensors.
+            "standardizer": {"mean": self.standardizer.mean.cpu(),
+                             "std": self.standardizer.std.cpu()},
         }
 
     @classmethod
@@ -167,4 +237,7 @@ class NOT:
         model.f.load_state_dict(checkpoint["f"])
         model.T.to(device)
         model.f.to(device)
+        model.standardizer = Standardizer(
+            checkpoint["standardizer"]["mean"],
+            checkpoint["standardizer"]["std"]).to(device)
         return model
