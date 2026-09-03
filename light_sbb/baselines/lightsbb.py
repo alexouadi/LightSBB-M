@@ -18,6 +18,9 @@ LARGE_BETA = 100.0
 # per stage of each loop.
 PRINT_EVERY = 4000
 
+# Margin keeping the drift finite at t = 1, matching run_alae.py.
+SAFE_T = 1e-2
+
 
 class LightSBB:
     """Joint drift and volatility bridge, trained by the SBB loop of the paper."""
@@ -36,11 +39,11 @@ class LightSBB:
         parser.add_argument("--lr", type=float, default=1e-3)
         parser.add_argument("--n-epochs", type=int, default=10000)
         parser.add_argument("--min-epoch", type=int, default=5000)
-        parser.add_argument("--safe-t", type=float, default=1e-2)
+        parser.add_argument("--safe-t", type=float, default=SAFE_T)
         parser.add_argument("--print-every", type=int, default=PRINT_EVERY)
 
     def __init__(self, input_dim, beta=0.8, eps=0.1, n_potentials=10, s_init=0.1,
-                 safe_t=1e-2, device="cuda"):
+                 safe_t=SAFE_T, device="cuda"):
         """Build the bridge, and the inverse network the moderate-beta loop needs."""
         self.input_dim = input_dim
         self.beta = beta
@@ -147,10 +150,11 @@ class LightSBB:
     @classmethod
     def from_checkpoint(cls, checkpoint, input_dim, device="cuda"):
         """Rebuild a trained baseline from ``checkpoint``."""
+        # Checkpoints written before safe_t was recorded all used the default.
         model = cls(input_dim=input_dim, beta=checkpoint["beta"], eps=checkpoint["eps"],
                     n_potentials=checkpoint["n_potentials"],
-                    s_init=checkpoint["s_init"], safe_t=checkpoint["safe_t"],
-                    device=device)
+                    s_init=checkpoint["s_init"],
+                    safe_t=checkpoint.get("safe_t", SAFE_T), device=device)
         model.model.load_state_dict(checkpoint["state_dict"])
         model.model.to(device)
 
