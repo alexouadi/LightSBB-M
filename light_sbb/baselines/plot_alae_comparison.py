@@ -45,7 +45,7 @@ def bridge_folder(model, beta, eps, test, n_images):
     return f"{model}_pretrained_b{beta:g}_e{eps:g}_test_{test}_s0_n{n_images}"
 
 
-def folder_names(sbb, sb, eps, seed, n_images):
+def folder_names(sbb, sb, eps, seeds, n_images):
     """Map each column to the image folder holding its decoded outputs.
 
     The two bridges were trained separately, so each carries its own beta and
@@ -55,7 +55,7 @@ def folder_names(sbb, sb, eps, seed, n_images):
         sbb: (beta, test) of the pretrained LightSBB-M checkpoint.
         sb: (beta, test) of the pretrained LightSB-M checkpoint.
         eps: Epsilon both bridges were trained at.
-        seed: Seed of the trained-here baselines.
+        seeds: Dict giving the seed of each trained-here baseline.
         n_images: Size of the held-out set the folders were decoded for.
 
     Returns:
@@ -63,7 +63,7 @@ def folder_names(sbb, sb, eps, seed, n_images):
     """
     return {
         "input": f"input_n{n_images}",
-        **{name: f"{name}_s{seed}_n{n_images}" for name in SEEDED},
+        **{name: f"{name}_s{seeds[name]}_n{n_images}" for name in SEEDED},
         "lightsb": bridge_folder("lightsb", sb[0], eps, sb[1], n_images),
         "lightsbb": bridge_folder("lightsbb", sbb[0], eps, sbb[1], n_images),
     }
@@ -137,8 +137,12 @@ def parse_args():
                    help="LightSBB-M checkpoint suffix, the part after test_")
     p.add_argument("--test-sb", default="final_K5",
                    help="LightSB-M checkpoint suffix, the part after test_")
-    p.add_argument("--seed", type=int, default=0,
-                   help="seed of the trained-here baselines")
+    p.add_argument("--seed-otcfm", type=int, default=1,
+                   help="seed of the OT-CFM column")
+    p.add_argument("--seed-not", type=int, default=0,
+                   help="seed of the NOT column")
+    p.add_argument("--seed-sf2m", type=int, default=0,
+                   help="seed of the [SF]^2M column")
     p.add_argument("--n-images", type=int, default=1000)
     p.add_argument("--image-dir", type=Path, default=IMAGE_DIR)
     p.add_argument("--out", type=Path,
@@ -152,7 +156,10 @@ def main():
 
     names = folder_names((args.beta_sbb, args.test_sbb),
                          (args.beta_sb, args.test_sb),
-                         args.eps, args.seed, args.n_images)
+                         args.eps,
+                         {"otcfm": args.seed_otcfm, "not": args.seed_not,
+                          "sf2m": args.seed_sf2m},
+                         args.n_images)
     columns = {}
     for key, name in names.items():
         folder = args.image_dir / name
