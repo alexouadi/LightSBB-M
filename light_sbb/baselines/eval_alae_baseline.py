@@ -21,7 +21,8 @@ sys.path.insert(0, str(LIGHT_SBB / "alae"))
 
 from alae.alae_ffhq_inference import decode, load_model  # noqa: E402
 from baselines import BASELINES  # noqa: E402
-from baselines.alae_data import DIM, MODEL_DIR, ROOT, load_alae_splits  # noqa: E402
+from baselines.alae_data import (DIM, MODEL_DIR, ROOT, load_alae_splits,  # noqa: E402
+                                 run_tag)
 from metrics_alae import compute_average_age, compute_cosine_similarity  # noqa: E402
 
 RESULTS_DIR = ROOT / "results" / "alae_baselines"
@@ -80,6 +81,7 @@ def save_results(run_dir, args, ages, similarities, n_transported, checkpoint,
     sims = np.array(list(similarities.values()))
     metrics = {
         "model": args.model,
+        "run_tag": run_tag(args),
         "seed": args.seed,
         "n_transported": n_transported,
         "n_faces_detected": len(ages),
@@ -115,8 +117,15 @@ def save_results(run_dir, args, ages, similarities, n_transported, checkpoint,
     return metrics_path
 
 
-def main():
-    """Transport held-out adult latents, decode them, and record the metrics."""
+def parse_args():
+    """Parse the evaluation arguments plus the selected baseline's own flags.
+
+    The baseline flags are registered so a swept run resolves to the checkpoint
+    it trained, through the same `run_tag` the training script wrote it under.
+
+    Returns:
+        Parsed arguments.
+    """
     p = argparse.ArgumentParser()
     p.add_argument("--model", choices=sorted(BASELINES), default="otcfm")
     p.add_argument("--n-images", type=int, default=1000)
@@ -132,7 +141,15 @@ def main():
     p.add_argument("--n-reference", type=int, default=1000,
                    help="real child faces the FID is measured against")
     p.add_argument("--device", default="cuda:3")
-    args = p.parse_args()
+
+    known, _ = p.parse_known_args()
+    BASELINES[known.model].add_arguments(p)
+    return p.parse_args()
+
+
+def main():
+    """Transport held-out adult latents, decode them, and record the metrics."""
+    args = parse_args()
 
     # Imported here because fid_alae imports this module, so a module-level import
     # would be circular.
@@ -154,7 +171,8 @@ def main():
     x_0 = torch.tensor(splits["test_latents"][inds])
     print(f"transporting {len(x_0)} held-out source latents")
 
-    with open(MODEL_DIR / f"{args.model}_s{args.seed}.pkl", "rb") as f:
+    tag = run_tag(args)
+    with open(MODEL_DIR / f"{tag}_s{args.seed}.pkl", "rb") as f:
         checkpoint = pickle.load(f)
 
     model = BASELINES[args.model].from_checkpoint(checkpoint, input_dim=DIM, device=device)
@@ -164,7 +182,7 @@ def main():
                             device=device)
 
     input_folder = IMAGE_DIR / f"input_n{args.n_images}"
-    output_folder = IMAGE_DIR / f"{args.model}_s{args.seed}_n{args.n_images}"
+    output_folder = IMAGE_DIR / f"{tag}_s{args.seed}_n{args.n_images}"
     decode_to_folder(alae_model, x_0, input_folder, args.decode_batch)
     decode_to_folder(alae_model, x_1, output_folder, args.decode_batch)
 
@@ -185,7 +203,7 @@ def main():
         print(f"FID: {fid:.2f}  ({fid_n_images} generated vs "
               f"{args.n_reference} reference)")
 
-    run_dir = RESULTS_DIR / args.model / f"seed_{args.seed}"
+    run_dir = RESULTS_DIR / tag / f"seed_{args.seed}"
     print(save_results(run_dir, args, ages, similarities, len(x_0), checkpoint,
                        fid, fid_n_images))
 

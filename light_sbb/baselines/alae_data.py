@@ -12,6 +12,26 @@ TEST_SIZE = 10000
 MODEL_DIR = ROOT / "artifacts" / "alae_baselines"
 
 
+def run_tag(args):
+    """Name a run by the hyperparameters that distinguish it from a sibling.
+
+    Only the bridges sweep beta and eps, so the other baselines keep the bare
+    model name and the results they already produced stay addressable.
+
+    Args:
+        args: Parsed CLI arguments, carrying ``model`` and any swept values.
+
+    Returns:
+        Tag used for the checkpoint, the decoded images and the results folder.
+    """
+    tag = args.model
+    if getattr(args, "beta", None) is not None:
+        tag += f"_b{args.beta:g}"
+    if getattr(args, "eps", None) is not None:
+        tag += f"_e{args.eps:g}"
+    return tag
+
+
 def load_alae_splits(data_dir):
     """Load ALAE latents and split them into adult/child train and test sets.
 

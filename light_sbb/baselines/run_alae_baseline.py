@@ -11,7 +11,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from baselines import BASELINES  # noqa: E402
-from baselines.alae_data import DIM, MODEL_DIR, load_alae_splits  # noqa: E402
+from baselines.alae_data import DIM, MODEL_DIR, load_alae_splits, run_tag  # noqa: E402
 from utils import TensorSampler  # noqa: E402
 
 
@@ -52,7 +52,7 @@ def main():
     model = BASELINES[args.model].from_args(input_dim=DIM, args=args, device=device)
     model.train(X_sampler, Y_sampler, args)
 
-    save_path = MODEL_DIR / f"{args.model}_s{args.seed}.pkl"
+    save_path = MODEL_DIR / f"{run_tag(args)}_s{args.seed}.pkl"
     with open(save_path, "wb") as f:
         pickle.dump(model.checkpoint(), f)
 
