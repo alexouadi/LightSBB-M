@@ -6,5 +6,7 @@ __pycache__/
 results/
 *.tar.gz
 .claude/settings.local.json
-figures/
+figures/*
+# The README illustration has to stay versioned to render on GitHub.
+!figures/readme/
 artifacts/
