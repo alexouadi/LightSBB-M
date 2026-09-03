@@ -8,7 +8,7 @@ import numpy as np
 
 
 def training_sbb(sampler_x, sampler_y, model, model_inv, beta, K, lr=1e-3, n_epochs=10000, min_epoch=5000,
-                 batch_size=512, eps=0.1, safe_t=1e-2, print_every=2000, device='cpu'):
+                 batch_size=512, eps=0.1, safe_t=1e-2, print_every=2000, grad_clip=1.0, device='cpu'):
     """Train LightSBB with an auxiliary inverse model.
 
     This routine alternates between:
@@ -29,6 +29,7 @@ def training_sbb(sampler_x, sampler_y, model, model_inv, beta, K, lr=1e-3, n_epo
         eps: Diffusion variance scale.
         safe_t: Margin to avoid numerical instability at ``t=1``.
         print_every: Number of training epochs between progress prints. 
+        grad_clip: Max gradient norm; None disables clipping.
         device: Training device.
 
     Returns:
@@ -66,7 +67,8 @@ def training_sbb(sampler_x, sampler_y, model, model_inv, beta, K, lr=1e-3, n_epo
             loss = F.mse_loss(target_drift, predicted_drift)
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
 
             if (epoch + 1) % print_every == 0 or epoch == 0:
@@ -91,7 +93,8 @@ def training_sbb(sampler_x, sampler_y, model, model_inv, beta, K, lr=1e-3, n_epo
             loss_inv = F.mse_loss(x_0_, y_0_) + F.mse_loss(x_T_, y_T_)
             optimizer_inv.zero_grad()
             loss_inv.backward()
-            torch.nn.utils.clip_grad_norm_(model_inv.parameters(), 1.0)
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model_inv.parameters(), grad_clip)
             optimizer_inv.step()
 
             if (epoch + 1) % print_every == 0 or epoch == 0:

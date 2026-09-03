@@ -40,6 +40,9 @@ class LightSBB:
         parser.add_argument("--n-epochs", type=int, default=10000)
         parser.add_argument("--min-epoch", type=int, default=5000)
         parser.add_argument("--safe-t", type=float, default=SAFE_T)
+        parser.add_argument("--grad-clip", type=float, default=1.0,
+                            help="max gradient norm; 0 disables clipping, as the "
+                                 "ICML training did")
         parser.add_argument("--print-every", type=int, default=PRINT_EVERY)
 
     def __init__(self, input_dim, beta=0.8, eps=0.1, n_potentials=10, s_init=0.1,
@@ -81,19 +84,24 @@ class LightSBB:
             Y_sampler: Target sampler exposing ``sample(n)``.
             args: Parsed CLI arguments carrying the hyperparameters.
         """
+        # 0 means "no clipping", which is what the ICML training used.
+        grad_clip = args.grad_clip if args.grad_clip > 0 else None
+
         if self.model_inv is None:
             self.model = training_sbb_beta_large(
                 X_sampler, Y_sampler, self.model, self.beta, K=args.k,
                 n_epochs=args.n_epochs, min_epoch=args.min_epoch,
                 batch_size=args.batch_size, lr=args.lr, eps=args.eps,
-                safe_t=args.safe_t, print_every=args.print_every, device=self.device
+                safe_t=args.safe_t, print_every=args.print_every,
+                grad_clip=grad_clip, device=self.device
             )
         else:
             self.model, self.model_inv = training_sbb(
                 X_sampler, Y_sampler, self.model, self.model_inv, self.beta, K=args.k,
                 n_epochs=args.n_epochs, min_epoch=args.min_epoch,
                 batch_size=args.batch_size, lr=args.lr, eps=args.eps,
-                safe_t=args.safe_t, print_every=args.print_every, device=self.device
+                safe_t=args.safe_t, print_every=args.print_every,
+                grad_clip=grad_clip, device=self.device
             )
 
     @torch.no_grad()
