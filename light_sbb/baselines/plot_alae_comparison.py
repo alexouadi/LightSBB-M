@@ -29,25 +29,43 @@ LABELS = {
 SEEDED = ("otcfm", "not", "sf2m")
 
 
-def folder_names(beta, eps, test, seed, n_images):
-    """Map each column to the image folder holding its decoded outputs.
+def bridge_folder(model, beta, eps, test, n_images):
+    """Name the image folder of one pretrained bridge.
 
     Args:
-        beta: Beta of the pretrained bridges.
-        eps: Epsilon both bridges were trained at.
+        model: Either ``lightsbb`` or ``lightsb``.
+        beta: Beta that bridge was trained at.
+        eps: Epsilon that bridge was trained at.
         test: Suffix identifying the checkpoint, as in the S3 key.
+        n_images: Size of the held-out set the folder was decoded for.
+
+    Returns:
+        The folder name written by the pretrained evaluation.
+    """
+    return f"{model}_pretrained_b{beta:g}_e{eps:g}_test_{test}_s0_n{n_images}"
+
+
+def folder_names(sbb, sb, eps, seed, n_images):
+    """Map each column to the image folder holding its decoded outputs.
+
+    The two bridges were trained separately, so each carries its own beta and
+    checkpoint suffix rather than sharing one setting.
+
+    Args:
+        sbb: (beta, test) of the pretrained LightSBB-M checkpoint.
+        sb: (beta, test) of the pretrained LightSB-M checkpoint.
+        eps: Epsilon both bridges were trained at.
         seed: Seed of the trained-here baselines.
         n_images: Size of the held-out set the folders were decoded for.
 
     Returns:
         Dict mapping column key to folder name, in display order.
     """
-    stem = f"_b{beta:g}_e{eps:g}_test_{test}"
     return {
         "input": f"input_n{n_images}",
         **{name: f"{name}_s{seed}_n{n_images}" for name in SEEDED},
-        "lightsb": f"lightsb_pretrained{stem}_s0_n{n_images}",
-        "lightsbb": f"lightsbb_pretrained{stem}_s0_n{n_images}",
+        "lightsb": bridge_folder("lightsb", sb[0], eps, sb[1], n_images),
+        "lightsbb": bridge_folder("lightsbb", sbb[0], eps, sbb[1], n_images),
     }
 
 
@@ -106,15 +124,19 @@ def build_figure(columns, indices, out_path, label_size=9):
 
 
 def parse_args():
-    """Parse the faces to show and the checkpoints the bridge columns come from."""
+    """Parse the faces to show and the checkpoint each bridge column comes from."""
     p = argparse.ArgumentParser()
     p.add_argument("--indices", type=int, nargs="+", default=[3, 72, 137, 824],
                    help="indices into the held-out set, one row each")
-    p.add_argument("--beta", type=float, default=1.0,
-                   help="beta of the pretrained LightSBB-M and LightSB-M columns")
+    p.add_argument("--beta-sbb", type=float, default=1.0,
+                   help="beta of the pretrained LightSBB-M column")
+    p.add_argument("--beta-sb", type=float, default=1.0,
+                   help="beta of the pretrained LightSB-M column")
     p.add_argument("--eps", type=float, default=0.1)
-    p.add_argument("--test", default="final_K5",
-                   help="checkpoint suffix, the part after test_ in the S3 key")
+    p.add_argument("--test-sbb", default="final_K5",
+                   help="LightSBB-M checkpoint suffix, the part after test_")
+    p.add_argument("--test-sb", default="final_K5",
+                   help="LightSB-M checkpoint suffix, the part after test_")
     p.add_argument("--seed", type=int, default=0,
                    help="seed of the trained-here baselines")
     p.add_argument("--n-images", type=int, default=1000)
@@ -128,7 +150,9 @@ def main():
     """Assemble the comparison figure from the decoded image folders."""
     args = parse_args()
 
-    names = folder_names(args.beta, args.eps, args.test, args.seed, args.n_images)
+    names = folder_names((args.beta_sbb, args.test_sbb),
+                         (args.beta_sb, args.test_sb),
+                         args.eps, args.seed, args.n_images)
     columns = {}
     for key, name in names.items():
         folder = args.image_dir / name
@@ -136,7 +160,9 @@ def main():
             raise FileNotFoundError(f"{folder} is missing; evaluate {key} first")
         columns[LABELS[key]] = load_column(folder, args.indices)
 
-    out = args.out or FIGURE_DIR / f"alae_comparison_b{args.beta:g}_e{args.eps:g}.png"
+    out = args.out or (FIGURE_DIR /
+                       f"alae_comparison_sbb_b{args.beta_sbb:g}"
+                       f"_sb_b{args.beta_sb:g}_e{args.eps:g}.png")
     print(build_figure(columns, args.indices, out))
 
 
