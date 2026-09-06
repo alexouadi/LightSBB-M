@@ -10,3 +10,4 @@ figures/*
 # The README illustration has to stay versioned to render on GitHub.
 !figures/readme/
 artifacts/
+light_sbb/separation/
