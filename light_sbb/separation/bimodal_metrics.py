@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 import distribution_metrics as dm
-from control_extraction import bridge_y, clamp_t, drift_x, sigma_x
+from control_extraction import bridge_y, clamp_t, drift_x, map_x, sigma_x
 
 MODE = 2.0
 
@@ -83,37 +83,59 @@ def achieved_cost(model, y_0, y_T, beta, times, eps=1.0, sb_baseline=False):
 
 
 def volatility_profile(model, beta, times, grid, eps=1.0, device="cpu"):
-    """Evaluate the learned scalar volatility on a fixed spatial grid.
+    """Evaluate the learned scalar volatility along the bridge the model actually uses.
 
     The note predicts sigma* is genuinely state-dependent for Test B, small near the
-    modes and larger in the basin between them. This records the profile so a later
-    figure can show it, and reduces it to a spread statistic.
+    modes and larger in the basin between them. sigma_x takes Y-space points, so the
+    grid is quantile-matched to the model's own Y_T rather than laid out in X-space:
+    a fixed X grid would be read as Y and sample sigma away from the target's support.
 
     Args:
         model: trained LightSBM.
         beta: volatility penalty.
         times: (m,) quadrature times in [0, 1).
-        grid: (g,) points in Y-space at which to evaluate.
+        grid: (g,) points in Y-space, built by `y_grid_from_bridge`.
         eps: diffusion scale.
         device: torch device.
 
     Returns:
-        dict with `times` (m,), `grid` (g,), `sigma` (m, g) as nested lists, and
-        `sigma_spread`, the time-averaged range of sigma across the grid over sqrt(eps).
+        dict with `times` (m,), `grid` (g,) in Y-space, `grid_x` (m, g) holding the
+        X-space point each sigma is indexed on, `sigma` (m, g), and `sigma_spread`,
+        the time-averaged range of sigma across the grid over sqrt(eps).
     """
     grid_t = torch.tensor(np.asarray(grid, dtype=np.float32).reshape(-1, 1), device=device)
-    rows, ts = [], []
+    rows, xs, ts = [], [], []
     for t in times:
         t = clamp_t(t)
         t_vec = torch.full((len(grid_t),), t, dtype=grid_t.dtype, device=device)
         sigma = sigma_x(model, t_vec, grid_t, beta).detach().reshape(-1)
         rows.append(sigma.cpu().numpy())
+        # sigma is evaluated at Y but indexed on the matching X, so the plotting
+        # abscissa is the image of the grid under the Bass map, not the grid itself.
+        xs.append(map_x(model, t_vec, grid_t, beta).detach().reshape(-1).cpu().numpy())
         ts.append(t)
 
     sigma = np.stack(rows)
     spread = float(np.mean(sigma.max(axis=1) - sigma.min(axis=1)) / np.sqrt(eps))
     return {"times": ts, "grid": np.asarray(grid, dtype=float).tolist(),
+            "grid_x": np.stack(xs).tolist(),
             "sigma": sigma.tolist(), "sigma_spread": spread}
+
+
+def y_grid_from_bridge(y_T, n_points=81, pad=0.1):
+    """Build a Y-space grid spanning the terminal states the model actually reaches.
+
+    Args:
+        y_T: (n, 1) terminal Y-space states of the trained bridge.
+        n_points: number of grid points.
+        pad: fraction of the range added on each side.
+
+    Returns:
+        (n_points,) numpy grid covering [min, max] of y_T, padded.
+    """
+    lo, hi = float(y_T.min()), float(y_T.max())
+    margin = pad * (hi - lo)
+    return np.linspace(lo - margin, hi + margin, n_points)
 
 
 def evaluate(model, pairs, y_0, y_T, beta, target_sample, n_times=21, eps=1.0,
@@ -131,7 +153,8 @@ def evaluate(model, pairs, y_0, y_T, beta, target_sample, n_times=21, eps=1.0,
         eps: diffusion scale.
         seed: RNG seed for the subsampling inside the distribution metrics.
         sb_baseline: whether the model is the Schrodinger-bridge baseline.
-        grid: optional (g,) spatial grid for the volatility profile.
+        grid: optional (g,) Y-space grid for the volatility profile; when omitted it
+            is derived from `y_T` so it spans the states the bridge actually reaches.
         device: torch device.
 
     Returns:
@@ -149,7 +172,8 @@ def evaluate(model, pairs, y_0, y_T, beta, target_sample, n_times=21, eps=1.0,
     if sb_baseline:
         # A Schrodinger bridge has sigma = sqrt(eps) I everywhere by construction.
         out["sigma_spread"] = 0.0
-    elif grid is not None:
+    else:
+        grid = y_grid_from_bridge(y_T) if grid is None else grid
         profile = volatility_profile(model, beta, times, grid, eps, device)
         out["sigma_spread"] = profile.pop("sigma_spread")
         out["vol_profile"] = profile

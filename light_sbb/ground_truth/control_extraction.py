@@ -183,10 +183,13 @@ def encode_y(model, model_inv, x, t, beta, safe_t=1e-2):
         (n, d) points in Y-space.
     """
     t_col = torch.full((len(x), 1), clamp_t(t, safe_t), dtype=x.dtype, device=x.device)
-    drift = model.get_drift(t_col.squeeze(-1), x)
     if model_inv is None:
+        drift = model.get_drift(t_col.squeeze(-1), x)
         return (x - drift / beta).detach()
-    return model_inv(t_col, (x + drift / beta).detach()).detach()
+    # Endpoint sampling is Y_0 = Z(0, x_0) on the raw sample, as in the paper and in
+    # run_2d_benchmark.py / run_heavy_tail.py. Z is trained to inverse X(y) = y + s/beta,
+    # so the correction belongs inside the net, not in its argument.
+    return model_inv(t_col, x).detach()
 
 
 def trajectories(model, y_0, y_T, times, beta):

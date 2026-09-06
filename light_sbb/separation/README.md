@@ -27,13 +27,16 @@ python separation/run_separation.py --test B --device cuda:0
 ```
 
 Defaults reproduce the training configuration of `run_2d_benchmark.py` and
-`run_heavy_tail.py`: `K=5`, 20 000 epochs, 50 potentials, batch 512, `lr=1e-3`,
-`eps=1`, `S_init=0.1`, and `t_model=8`/`d_model=32` for the inverse net. Each run
-trains three models per `delta` (LightSBB at `beta=10` and `beta=100`, plus the
-LightSB-M baseline) over six `delta` values.
+`run_heavy_tail.py`: 20 000 epochs, 50 potentials, batch 512, `lr=1e-3`, `eps=1`,
+`S_init=0.1`, and `t_model=8`/`d_model=32` for the inverse net. Each run trains three
+models per `delta` (LightSBB at `beta=10` and `beta=100`, plus the LightSB-M baseline)
+over six `delta` values.
 
 `beta=10` uses the moderate-beta algorithm with an inverse network, `beta=100` uses the
-inverse-net-free large-beta algorithm; the switch is `--large-beta`.
+inverse-net-free large-beta algorithm; the switch is `--large-beta`. The published 2D run
+also raises the number of outer stages in the moderate regime, so `K=5` above the
+threshold and `K=15` below it (`--K` and `--K-moderate`; pass `--K-moderate` equal to
+`--K` to use one value everywhere).
 
 Every knob is overridable, for instance:
 
@@ -46,13 +49,29 @@ python separation/run_separation.py --test B --device cuda:1 \
 Useful flags: `--baseline-only` / `--no-baseline` to train one side alone,
 `--n-eval` for the number of generated pairs scored, `--no-archive` to skip the tarball.
 
+Splitting the sweep across devices is one column each, and the summary stays complete
+whichever process finishes last:
+
+```bash
+python separation/run_separation.py --test A --betas 100 --no-baseline --device cuda:0
+python separation/run_separation.py --test A --betas 10  --no-baseline --device cuda:1
+python separation/run_separation.py --test A --baseline-only            --device cuda:2
+```
+
 ## Output
 
 Results land under `results/separation/test_<A|B>/<family>/delta_<d>/seed_<s>/`, each
-holding `metrics.json`, `pairs.npy` (the generated `(X_0, X_1)`) and `weights.pt`. Every
-row of the sweep is also collected into `results/separation/summary_test_<A|B>.json`,
-which is what the comparison figure should read. The whole folder is tarred to
+holding `metrics.json`, `pairs.npy` (the generated `(X_0, X_1)`) and `weights.pt`. Those
+per-run files are the source of truth. The summary
+`results/separation/summary_test_<A|B>.json`, which is what the comparison figure should
+read, is rebuilt at the end of every run by re-reading each `metrics.json` on disk, so
+runs from separate invocations accumulate rather than overwrite each other.
+`--summary-only` rebuilds it without training anything, which is the way to regenerate it
+after unpacking results produced elsewhere. The whole folder is tarred to
 `separation_test_<A|B>.tar.gz` at the repo root at the end of the run.
+
+The folder name records `beta` but not which algorithm produced it, so the same `beta` run
+under two different `--large-beta` thresholds overwrites itself.
 
 ## Metrics
 

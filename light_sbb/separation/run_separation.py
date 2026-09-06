@@ -37,7 +37,6 @@ ROOT = Path(__file__).resolve().parents[2]
 RESULTS_SUBDIR = "results/separation"
 LARGE_BETA = 100.0
 SAFE_T = 1e-2
-VOL_GRID = np.linspace(-4.0, 4.0, 81)
 
 
 def run_dir(test, method, beta, delta, seed):
@@ -70,10 +69,21 @@ def build_model(dim, args, x_sampler, y_sampler, device):
     return model
 
 
+def stages(beta, args):
+    """Return the number of outer stages, which the published moderate-beta run raises.
+
+    run_2d_benchmark.py uses K = 5 at beta = 100 but K = 15 at beta = 10, the regime
+    where the inverse net has to be fitted alongside the bridge.
+    """
+    if args.K_moderate is not None and beta < args.large_beta:
+        return args.K_moderate
+    return args.K
+
+
 def train_sbb(x_sampler, y_sampler, dim, beta, args, device):
     """Train LightSBB, returning (model, model_inv) with model_inv None for large beta."""
     model = build_model(dim, args, x_sampler, y_sampler, device)
-    shared = dict(K=args.K, n_epochs=args.n_epochs, min_epoch=args.min_epoch,
+    shared = dict(K=stages(beta, args), n_epochs=args.n_epochs, min_epoch=args.min_epoch,
                   batch_size=args.batch_size, lr=args.lr, eps=args.eps,
                   safe_t=args.safe_t, print_every=args.print_every, device=device)
 
@@ -169,7 +179,7 @@ def score(test, model, pairs, y_0, y_T, beta, delta, args, device, sb_baseline):
 
     return bm.evaluate(model, pairs, y_0, y_T, beta, target, n_times=args.n_times,
                        eps=args.eps, seed=args.seed_for_metrics,
-                       sb_baseline=sb_baseline, grid=VOL_GRID, device=device)
+                       sb_baseline=sb_baseline, device=device)
 
 
 def run_one(test, method, beta, delta, seed, args, device):
@@ -201,7 +211,7 @@ def run_one(test, method, beta, delta, seed, args, device):
     metrics = score(test, model, pairs, y_0, y_T, beta, delta, args, device,
                     sb_baseline=method == "lightsb")
     metrics.update(test=test, method=method, beta=beta, delta=delta, seed=seed,
-                   K=1 if method == "lightsb" else args.K, eps=args.eps,
+                   K=1 if method == "lightsb" else stages(beta, args), eps=args.eps,
                    sb_lower_bound=tg.sb_lower_bound(test, delta, args.eps),
                    sbb_upper_bound=tg.sbb_upper_bound(test, delta, beta, args.eps),
                    target_entropy=tg.entropy(test, delta),
@@ -235,12 +245,39 @@ def summary_line(m):
             f"sigma spread {m['sigma_spread']:.4f}")
 
 
-def write_summary(rows, test, path):
-    """Write every metric row of the sweep to one JSON file for the later figure."""
+def collect_rows(test):
+    """Read back every metrics.json already on disk for one test.
+
+    Args:
+        test: "A" or "B".
+
+    Returns:
+        list of metric rows, ordered by (method, beta, delta, seed).
+    """
+    root = ROOT / RESULTS_SUBDIR / f"test_{test}"
+    rows = []
+    for path in sorted(root.glob("*/delta_*/seed_*/metrics.json")):
+        with open(path) as f:
+            rows.append(json.load(f))
+    return sorted(rows, key=lambda r: (r["method"], r["beta"], r["delta"], r["seed"]))
+
+
+def write_summary(test, path):
+    """Write every run found on disk to one JSON file for the later figure.
+
+    Rebuilt from the individual metrics.json files rather than from the rows of
+    this invocation, so a sweep split across several devices still ends up with a
+    complete summary whichever process finishes last.
+
+    Args:
+        test: "A" or "B".
+        path: destination JSON file.
+    """
+    rows = collect_rows(test)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump({"test": test, "rows": rows}, f, indent=2)
-    print(f"\nSummary -> {path}")
+    print(f"\nSummary -> {path}   ({len(rows)} runs)")
 
 
 def archive(name):
@@ -260,6 +297,9 @@ def main():
                         "inverse-net-free algorithm")
     p.add_argument("--seeds", type=int, nargs="+", default=[42])
     p.add_argument("--K", type=int, default=5, help="outer bridge refinement stages")
+    p.add_argument("--K-moderate", type=int, default=15,
+                   help="stages used below --large-beta, where the inverse net is fitted "
+                        "as well; the published 2D run raises K to 15 there")
     p.add_argument("--eps", type=float, default=1.0, help="diffusion scale, held fixed")
     p.add_argument("--n-potentials", type=int, default=50)
     p.add_argument("--t-model", type=int, default=8, help="inverse-net time encoder width")
@@ -287,7 +327,15 @@ def main():
     p.add_argument("--archive-name", default=None,
                    help="archive stem; defaults to separation_test_<test>")
     p.add_argument("--no-archive", action="store_true")
+    p.add_argument("--summary-only", action="store_true",
+                   help="rebuild the summary from the metrics.json already on disk "
+                        "and exit, training nothing")
     args = p.parse_args()
+
+    summary_path = ROOT / RESULTS_SUBDIR / f"summary_test_{args.test}.json"
+    if args.summary_only:
+        write_summary(args.test, summary_path)
+        return
 
     # An explicit --device is honoured as given; only a missing CUDA runtime
     # downgrades a cuda request, so --device cpu really means CPU.
@@ -318,7 +366,7 @@ def main():
         head = f"{r['method']:>9} beta={r['beta']:>5g} delta={r['delta']:>5g} seed={r['seed']}"
         print(f"{head}  {summary_line(r)}")
 
-    write_summary(rows, args.test, ROOT / RESULTS_SUBDIR / f"summary_test_{args.test}.json")
+    write_summary(args.test, summary_path)
     if not args.no_archive:
         archive(args.archive_name or f"separation_test_{args.test}")
 
