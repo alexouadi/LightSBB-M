@@ -297,9 +297,10 @@ def main():
                         "inverse-net-free algorithm")
     p.add_argument("--seeds", type=int, nargs="+", default=[42])
     p.add_argument("--K", type=int, default=5, help="outer bridge refinement stages")
-    p.add_argument("--K-moderate", type=int, default=15,
+    p.add_argument("--K-moderate", type=int, default=5,
                    help="stages used below --large-beta, where the inverse net is fitted "
-                        "as well; the published 2D run raises K to 15 there")
+                        "as well; the published 2D run uses 15 there, which triples the "
+                        "training time")
     p.add_argument("--eps", type=float, default=1.0, help="diffusion scale, held fixed")
     p.add_argument("--n-potentials", type=int, default=50)
     p.add_argument("--t-model", type=int, default=8, help="inverse-net time encoder width")

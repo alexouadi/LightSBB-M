@@ -33,10 +33,9 @@ models per `delta` (LightSBB at `beta=10` and `beta=100`, plus the LightSB-M bas
 over six `delta` values.
 
 `beta=10` uses the moderate-beta algorithm with an inverse network, `beta=100` uses the
-inverse-net-free large-beta algorithm; the switch is `--large-beta`. The published 2D run
-also raises the number of outer stages in the moderate regime, so `K=5` above the
-threshold and `K=15` below it (`--K` and `--K-moderate`; pass `--K-moderate` equal to
-`--K` to use one value everywhere).
+inverse-net-free large-beta algorithm; the switch is `--large-beta`. Both regimes run at
+`K=5` by default. The published 2D run uses `K=15` below the threshold, which triples the
+training time; `--K-moderate 15` reproduces it.
 
 Every knob is overridable, for instance:
 
