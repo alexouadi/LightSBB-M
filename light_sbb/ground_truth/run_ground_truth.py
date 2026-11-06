@@ -10,6 +10,7 @@ Results, weights and (X_0, X_1) pairs are archived to a single .tar.gz at the re
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -27,6 +28,7 @@ from control_extraction import encode_y  # noqa: E402
 from lightsbm import LightSBM, MLP_network  # noqa: E402
 from train_lightsbb import training_sbb  # noqa: E402
 from train_lightsbb_beta_large import training_sbb_beta_large  # noqa: E402
+from train_lightsbb_damped import encode_y0, training_sbb_damped  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS_SUBDIR = "results/ground_truth"
@@ -60,6 +62,8 @@ def run_dir(beta, seed, K, args=None):
                                      ("dm", args.d_model, 32)):
             if value != default:
                 leaf += f"_{name}{value:g}"
+        if args.inverse == "damped":
+            leaf += f"_damped{args.damping:g}"
     path = ROOT / RESULTS_SUBDIR / family / f"seed_{seed}" / leaf
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -78,7 +82,12 @@ class GaussianSampler:
 
 
 def train(x_sampler, y_sampler, beta, args, device):
-    """Train one model, returning (model, model_inv) with model_inv None for large beta."""
+    """Train one model.
+
+    Returns:
+        Tuple ``(model, model_inv, encoder, residuals)``. ``model_inv`` is None unless the inverse
+        network is trained; ``encoder`` and ``residuals`` are None unless the inverse is damped.
+    """
     model = LightSBM(dim=2, n_potentials=args.n_potentials, epsilon=args.eps,
                      S_diagonal_init=args.s_init, is_diagonal=True).to(device)
 
@@ -90,14 +99,26 @@ def train(x_sampler, y_sampler, beta, args, device):
                   batch_size=args.batch_size, lr=args.lr, eps=args.eps,
                   safe_t=args.safe_t, print_every=args.print_every, device=device)
 
+    if args.inverse == "damped":
+        model, snapshots, residuals = training_sbb_damped(
+            x_sampler, y_sampler, model, beta, damping=args.damping, warm_stages=args.warm_stages,
+            pool_size=args.pool_size, **shared)
+
+        def encoder(x_0):
+            return encode_y0(snapshots, x_0, beta, args.damping, args.warm_stages)
+
+        encoder.snapshots = snapshots
+        return model, None, encoder, residuals
+
     if beta >= args.large_beta:
-        return training_sbb_beta_large(x_sampler, y_sampler, model, beta, **shared), None
+        return training_sbb_beta_large(x_sampler, y_sampler, model, beta, **shared), None, None, None
 
     model_inv = MLP_network(input_dim=2, t_model=args.t_model, d_model=args.d_model).to(device)
-    return training_sbb(x_sampler, y_sampler, model, model_inv, beta, **shared)
+    model, model_inv = training_sbb(x_sampler, y_sampler, model, model_inv, beta, **shared)
+    return model, model_inv, None, None
 
 
-def generate_pairs(model, model_inv, x_sampler, beta, n, device, safe_t=SAFE_T):
+def generate_pairs(model, model_inv, x_sampler, beta, n, device, safe_t=SAFE_T, encoder=None):
     """Sample (X_0, X_hat_1) pairs and the Y-space endpoints the metrics need.
 
     Args:
@@ -108,12 +129,13 @@ def generate_pairs(model, model_inv, x_sampler, beta, n, device, safe_t=SAFE_T):
         n: number of pairs.
         device: torch device.
         safe_t: margin keeping the terminal time away from the singularity at t = 1.
+        encoder: endpoint map replacing `encode_y` when the inverse is damped.
 
     Returns:
         (pairs, y_0, y_T) with pairs of shape (n, 4).
     """
     x_0 = x_sampler.sample(n)
-    y_0 = encode_y(model, model_inv, x_0, 0.0, beta, safe_t=safe_t)
+    y_0 = encoder(x_0) if encoder else encode_y(model, model_inv, x_0, 0.0, beta, safe_t=safe_t)
     y_T = model(y_0)
 
     t_T = torch.full((n,), 1.0 - safe_t, device=device)
@@ -206,6 +228,11 @@ def run_baseline(betas, seed, args, device):
 def run_one(beta, seed, args, device):
     """Train and evaluate a single (beta, seed), returning its metric row."""
     print(f"\n{'=' * 70}\nbeta = {beta:g}   seed = {seed}   K = {args.K}\n{'=' * 70}")
+    out = run_dir(beta, seed, args.K, args)
+    if args.skip_finished and (out / "metrics.json").exists():
+        print("already complete, skipping")
+        return json.loads((out / "metrics.json").read_text())
+
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -213,32 +240,40 @@ def run_one(beta, seed, args, device):
     y_sampler = GaussianSampler(args.sigma2, device)
 
     started = time.time()
-    model, model_inv = train(x_sampler, y_sampler, beta, args, device)
+    model, model_inv, encoder, residuals = train(x_sampler, y_sampler, beta, args, device)
     train_time = time.time() - started
 
     model.eval()
     eval_safe_t = args.eval_safe_t if args.eval_safe_t is not None else args.safe_t
     pairs, y_0, y_T = generate_pairs(model, model_inv, x_sampler, beta, args.n_eval,
-                                     device, eval_safe_t)
+                                     device, eval_safe_t, encoder)
 
     metrics = pm.evaluate(model, pairs, y_0, y_T, beta, n_times=args.n_times,
                           sigma2=tuple(args.sigma2), eps=args.eps, seed=seed)
     metrics.update(beta=beta, seed=seed, K=args.K, method="lightsbb",
                    safe_t=args.safe_t, eval_safe_t=eval_safe_t, large_beta=args.large_beta,
                    s_init=args.s_init, t_model=args.t_model, d_model=args.d_model,
-                   train_time_s=round(train_time, 1))
+                   train_time_s=round(train_time, 1), inverse=args.inverse,
+                   terminal_var=pairs[:, 2:].var(axis=0).tolist(),
+                   cross_cov_by_coordinate=[float(np.cov(pairs[:, i], pairs[:, i + 2])[0, 1])
+                                            for i in range(2)])
+    if residuals is not None:
+        metrics.update(inverse_residuals=residuals, damping=args.damping,
+                       warm_stages=args.warm_stages, pool_size=args.pool_size)
 
-    out = run_dir(beta, seed, args.K, args)
     np.save(out / "pairs.npy", pairs)
     torch.save({"model": model.state_dict(),
                 "model_inv": None if model_inv is None else model_inv.state_dict(),
                 "beta": beta, "K": args.K, "seed": seed, "eps": args.eps,
-                "n_potentials": args.n_potentials},
+                "n_potentials": args.n_potentials,
+                "map_snapshots": None if encoder is None else [m.state_dict() for m in encoder.snapshots]},
                out / "weights.pt")
     with open(out / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
 
-    print(f"\n  plan SW2        {metrics['plan_sw2']:.4f}")
+    print(f"\n  terminal var    {metrics['terminal_var']}")
+    print(f"  cross-cov       {metrics['cross_cov_by_coordinate']}")
+    print(f"  plan SW2        {metrics['plan_sw2']:.4f}")
     print(f"  terminal SW2    {metrics['terminal_sw2']:.4f}")
     print(f"  cross-cov err   {metrics['cross_cov_err']:.4f}")
     print(f"  objective gap   {metrics['objective_gap']:+.4f}")
@@ -251,7 +286,10 @@ def run_one(beta, seed, args, device):
 def archive(name):
     """Tar the results folder at the repo root so one artifact comes back."""
     tar = ROOT / f"{name}.tar.gz"
-    subprocess.run(["tar", "-czf", str(tar), "-C", str(ROOT), RESULTS_SUBDIR], check=True)
+    # Written aside and moved, so parallel launches never leave a partial archive.
+    tmp = ROOT / f"{name}.{os.getpid()}.tmp"
+    subprocess.run(["tar", "-czf", str(tmp), "-C", str(ROOT), RESULTS_SUBDIR], check=True)
+    os.replace(tmp, tar)
     print(f"\nArchived -> {tar}")
 
 
@@ -273,6 +311,13 @@ def main():
                    help="margin used at evaluation time; defaults to --safe-t")
     p.add_argument("--large-beta", type=float, default=LARGE_BETA,
                    help="beta at or above which the inverse-net-free regime is used")
+    p.add_argument("--inverse", choices=["default", "damped"], default="default",
+                   help="damped replaces the map to Y by averaged exact inverses")
+    p.add_argument("--damping", type=float, default=0.5, help="weight of the new exact inverse")
+    p.add_argument("--warm-stages", type=int, default=1, help="initial first-order stages")
+    p.add_argument("--pool-size", type=int, default=100000, help="samples per endpoint")
+    p.add_argument("--skip-finished", action="store_true",
+                   help="reuse the runs that already wrote their metrics")
     p.add_argument("--batch-size", type=int, default=512)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--n-epochs", type=int, default=20000)
@@ -297,7 +342,10 @@ def main():
     rows = []
     for seed in args.seeds:
         if not args.baseline_only:
-            rows += [run_one(beta, seed, args, device) for beta in args.betas]
+            for beta in args.betas:
+                rows.append(run_one(beta, seed, args, device))
+                if not args.no_archive:
+                    archive(args.archive_name)
         if args.baseline or args.baseline_only:
             rows += run_baseline(args.betas, seed, args, device)
 
