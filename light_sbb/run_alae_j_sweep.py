@@ -32,10 +32,7 @@ from lightsbm import LightSBM, MLP_network  # noqa: E402
 from train_lightsbb import training_sbb  # noqa: E402
 from utils import TensorSampler  # noqa: E402
 
-SWEEP = "j_sweep"
-RESULTS_DIR = ROOT / "results" / "alae_baselines" / SWEEP
-CHECKPOINT_DIR = MODEL_DIR / SWEEP
-ARCHIVE = ROOT / "alae_j_sweep.tar.gz"
+SWEEPS = {"random": "j_sweep", "samples": "j_sweep_r_samples"}
 T_MODEL = 32
 D_MODEL = 128
 SUMMARY_FIELDS = ["J", "seed", "pct_age_leq_18", "avg_age", "std_age", "identity_sim_mean",
@@ -57,6 +54,8 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=512)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--s-init", type=float, default=0.1)
+    p.add_argument("--r-init", choices=sorted(SWEEPS), default="random",
+                   help="initial mixture means; each choice has its own results folder and archive")
     p.add_argument("--safe-t", type=float, default=1e-2)
     p.add_argument("--print-every", type=int, default=4000)
     p.add_argument("--n-images", type=int, default=1000)
@@ -68,6 +67,16 @@ def parse_args():
     p.add_argument("--keep-images", action="store_true",
                    help="keep the decoded outputs, about 1.5 GB per run")
     return p.parse_args()
+
+
+def results_dir(args):
+    """Return the results folder of this sweep."""
+    return ROOT / "results" / "alae_baselines" / SWEEPS[args.r_init]
+
+
+def checkpoint_dir(args):
+    """Return the checkpoint folder of this sweep."""
+    return MODEL_DIR / SWEEPS[args.r_init]
 
 
 def write_atomic(path, write):
@@ -127,6 +136,8 @@ def train_run(J, seed, args, device, checkpoint_path):
 
     model = LightSBM(dim=DIM, n_potentials=J, epsilon=args.eps, S_diagonal_init=args.s_init,
                      is_diagonal=True).to(device)
+    if args.r_init == "samples":
+        model.init_r_by_samples(torch.cat([x_sampler.sample(J // 2), y_sampler.sample(J - J // 2)], dim=0))
     model_inv = MLP_network(input_dim=DIM, t_model=T_MODEL, d_model=D_MODEL).to(device)
 
     if device.type == "cuda":
@@ -149,6 +160,7 @@ def train_run(J, seed, args, device, checkpoint_path):
         "n_epochs": args.n_epochs,
         "min_epoch": args.min_epoch,
         "s_init": args.s_init,
+        "r_init": args.r_init,
         "safe_t": args.safe_t,
         "n_parameters": sum(p.numel() for p in model.parameters()),
         "train_seconds": time.perf_counter() - start,
@@ -253,7 +265,7 @@ def evaluate_run(J, seed, args, device, checkpoint):
     del model, model_inv
     prepare_shared_images(run_args, x_0, device)
 
-    tag = f"{SWEEP}/J{J}"
+    tag = f"{SWEEPS[args.r_init]}/J{J}"
     architecture = {k: v for k, v in checkpoint.items() if not isinstance(v, dict)}
     metrics_path = Path(score_transport(run_args, tag, x_0, x_1, architecture, device))
 
@@ -272,9 +284,10 @@ def evaluate_run(J, seed, args, device, checkpoint):
         output_folder.rmdir()
 
 
-def write_summary():
+def write_summary(args):
     """Rebuild the per-run summary table from every finished run."""
-    rows = [json.loads(path.read_text()) for path in sorted(RESULTS_DIR.glob("J*/seed_*/metrics.json"))]
+    folder = results_dir(args)
+    rows = [json.loads(path.read_text()) for path in sorted(folder.glob("J*/seed_*/metrics.json"))]
     rows.sort(key=lambda row: (row["J"], row["seed"]))
 
     def write(tmp):
@@ -283,20 +296,25 @@ def write_summary():
             writer.writeheader()
             writer.writerows(rows)
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    write_atomic(RESULTS_DIR / "summary.csv", write)
+    folder.mkdir(parents=True, exist_ok=True)
+    write_atomic(folder / "summary.csv", write)
 
 
-def write_archive():
+def archive_path(args):
+    """Return the archive of this sweep at the repo root."""
+    return ROOT / f"alae_{SWEEPS[args.r_init]}.tar.gz"
+
+
+def write_archive(args):
     """Bundle the results and checkpoints so far into one archive at the repo root."""
 
     def write(tmp):
         with tarfile.open(tmp, "w:gz") as tar:
-            for folder in (RESULTS_DIR, CHECKPOINT_DIR):
+            for folder in (results_dir(args), checkpoint_dir(args)):
                 if folder.is_dir():
                     tar.add(folder, arcname=folder.relative_to(ROOT).as_posix())
 
-    write_atomic(ARCHIVE, write)
+    write_atomic(archive_path(args), write)
 
 
 def run_one(J, seed, args, device):
@@ -310,14 +328,14 @@ def run_one(J, seed, args, device):
         args: Parsed CLI arguments.
         device: Device of this run.
     """
-    run_dir = RESULTS_DIR / f"J{J}" / f"seed_{seed}"
+    run_dir = results_dir(args) / f"J{J}" / f"seed_{seed}"
     if (run_dir / "metrics.json").exists():
         print(f"J={J} seed={seed}: already complete, skipping", flush=True)
         return
 
     print(f"J={J} seed={seed}: starting on {device}", flush=True)
     failure_path = run_dir / "failure.json"
-    checkpoint_path = CHECKPOINT_DIR / f"J{J}_s{seed}.pkl"
+    checkpoint_path = checkpoint_dir(args) / f"J{J}_s{seed}.pkl"
     try:
         if checkpoint_path.exists():
             with open(checkpoint_path, "rb") as f:
@@ -336,8 +354,8 @@ def run_one(J, seed, args, device):
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-    write_summary()
-    write_archive()
+    write_summary(args)
+    write_archive(args)
 
 
 def main():
@@ -349,7 +367,7 @@ def main():
     for J in args.js:
         for seed in args.seeds:
             run_one(J, seed, args, device)
-    print(f"archive: {ARCHIVE}", flush=True)
+    print(f"archive: {archive_path(args)}", flush=True)
 
 
 if __name__ == "__main__":
