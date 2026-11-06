@@ -64,6 +64,10 @@ def run_dir(beta, seed, K, args=None):
                 leaf += f"_{name}{value:g}"
         if args.inverse == "damped":
             leaf += f"_damped{args.damping:g}"
+            if args.warm_stages != 1:
+                leaf += f"_w{args.warm_stages}"
+        if args.r_init != "samples":
+            leaf += f"_r{args.r_init}"
     path = ROOT / RESULTS_SUBDIR / family / f"seed_{seed}" / leaf
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -81,7 +85,47 @@ class GaussianSampler:
         return torch.randn(n, len(self.std), device=self.device) * self.std
 
 
-def train(x_sampler, y_sampler, beta, args, device):
+def stage_tracker(x_sampler, beta, seed, args, device, out):
+    """Build a callback scoring the model after each outer stage against the exact solution.
+
+    The scoring runs on its own random stream, so tracking does not change the training.
+
+    Args:
+        x_sampler: source sampler.
+        beta: SBB volatility penalty.
+        seed: run seed.
+        args: parsed CLI arguments.
+        device: torch device.
+        out: run folder receiving trajectory.json, rewritten after each stage.
+
+    Returns:
+        Callable passed as `on_stage_end`.
+    """
+    rows = []
+    cuda_devices = [device] if device.type == "cuda" else []
+
+    def on_stage_end(stage, model, snapshots):
+        with torch.random.fork_rng(devices=cuda_devices):
+            torch.manual_seed(seed + 1000 * (stage + 1))
+
+            def encoder(x_0):
+                return encode_y0(snapshots, x_0, beta, args.damping, args.warm_stages)
+
+            pairs, y_0, y_T = generate_pairs(model, None, x_sampler, beta, args.n_eval, device,
+                                             args.safe_t, encoder)
+            row = pm.evaluate(model, pairs, y_0, y_T, beta, n_times=args.n_times,
+                              sigma2=tuple(args.sigma2), eps=args.eps, seed=seed)
+        row.update(stage=stage + 1, terminal_var=pairs[:, 2:].var(axis=0).tolist(),
+                   cross_cov_by_coordinate=[float(np.cov(pairs[:, i], pairs[:, i + 2])[0, 1])
+                                            for i in range(2)])
+        rows.append(row)
+        (out / "trajectory.json").write_text(json.dumps(rows, indent=2))
+        print(f"  stage {stage + 1}: var {row['terminal_var']}  gap {row['objective_gap']:+.4f}")
+
+    return on_stage_end
+
+
+def train(x_sampler, y_sampler, beta, seed, args, device, out):
     """Train one model.
 
     Returns:
@@ -91,9 +135,10 @@ def train(x_sampler, y_sampler, beta, args, device):
     model = LightSBM(dim=2, n_potentials=args.n_potentials, epsilon=args.eps,
                      S_diagonal_init=args.s_init, is_diagonal=True).to(device)
 
-    init_x = x_sampler.sample(args.n_potentials // 2)
-    init_y = y_sampler.sample(args.n_potentials - args.n_potentials // 2)
-    model.init_r_by_samples(torch.cat([init_x, init_y], dim=0))
+    if args.r_init == "samples":
+        init_x = x_sampler.sample(args.n_potentials // 2)
+        init_y = y_sampler.sample(args.n_potentials - args.n_potentials // 2)
+        model.init_r_by_samples(torch.cat([init_x, init_y], dim=0))
 
     shared = dict(K=args.K, n_epochs=args.n_epochs, min_epoch=args.min_epoch,
                   batch_size=args.batch_size, lr=args.lr, eps=args.eps,
@@ -102,7 +147,9 @@ def train(x_sampler, y_sampler, beta, args, device):
     if args.inverse == "damped":
         model, snapshots, residuals = training_sbb_damped(
             x_sampler, y_sampler, model, beta, damping=args.damping, warm_stages=args.warm_stages,
-            pool_size=args.pool_size, **shared)
+            pool_size=args.pool_size,
+            on_stage_end=stage_tracker(x_sampler, beta, seed, args, device, out) if args.track_stages else None,
+            **shared)
 
         def encoder(x_0):
             return encode_y0(snapshots, x_0, beta, args.damping, args.warm_stages)
@@ -240,7 +287,7 @@ def run_one(beta, seed, args, device):
     y_sampler = GaussianSampler(args.sigma2, device)
 
     started = time.time()
-    model, model_inv, encoder, residuals = train(x_sampler, y_sampler, beta, args, device)
+    model, model_inv, encoder, residuals = train(x_sampler, y_sampler, beta, seed, args, device, out)
     train_time = time.time() - started
 
     model.eval()
@@ -316,6 +363,10 @@ def main():
     p.add_argument("--damping", type=float, default=0.5, help="weight of the new exact inverse")
     p.add_argument("--warm-stages", type=int, default=1, help="initial first-order stages")
     p.add_argument("--pool-size", type=int, default=100000, help="samples per endpoint")
+    p.add_argument("--track-stages", action="store_true",
+                   help="score the model after each outer stage, with --inverse damped")
+    p.add_argument("--r-init", choices=["samples", "random"], default="samples",
+                   help="initialize the mixture means on the marginals, or at random")
     p.add_argument("--skip-finished", action="store_true",
                    help="reuse the runs that already wrote their metrics")
     p.add_argument("--batch-size", type=int, default=512)

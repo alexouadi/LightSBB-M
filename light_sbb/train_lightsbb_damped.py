@@ -91,7 +91,7 @@ def encode_y0(snapshots, x_0, beta, damping, warm_stages):
 
 def training_sbb_damped(sampler_x, sampler_y, model, beta, K, lr=1e-3, n_epochs=20000, min_epoch=20000,
                         batch_size=512, eps=1.0, safe_t=1e-2, print_every=2000, damping=0.5,
-                        warm_stages=1, pool_size=100000, device="cpu"):
+                        warm_stages=1, pool_size=100000, on_stage_end=None, device="cpu"):
     """Train LightSBB on endpoint pools refreshed by the damped exact inverse.
 
     The maps are stored as their values on fixed pools of samples, so each outer update solves
@@ -113,6 +113,8 @@ def training_sbb_damped(sampler_x, sampler_y, model, beta, K, lr=1e-3, n_epochs=
         damping: Weight of the new exact inverse.
         warm_stages: Number of initial stages using the first-order map.
         pool_size: Number of samples per endpoint.
+        on_stage_end: Optional callable receiving the stage index, the model and the snapshots
+            its endpoint map is made of.
         device: Training device.
 
     Returns:
@@ -144,8 +146,11 @@ def training_sbb_damped(sampler_x, sampler_y, model, beta, K, lr=1e-3, n_epochs=
             if (epoch + 1) % print_every == 0 or epoch == 0:
                 print(f"Epoch [{epoch + 1}/{curr_epoch}] - Training Loss: {loss.item():.4f}")
 
+        model.eval()
+        if on_stage_end is not None:
+            on_stage_end(k, model, snapshots)
+
         if k < K - 1:
-            model.eval()
             snapshots.append(copy.deepcopy(model))
             y_0, residual_0 = update_endpoint_map(model, x_0, y_0, 0.0, beta, k, damping, warm_stages)
             y_T, residual_T = update_endpoint_map(model, x_T, y_T, 1 - safe_t, beta, k, damping, warm_stages)
