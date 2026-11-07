@@ -8,12 +8,9 @@ run_matched_budget_2d.py, with the same samples per seed, so the numbers compare
 
 import argparse
 import csv
-import importlib.util
 import json
-import subprocess
 import sys
 import tarfile
-import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -29,14 +26,13 @@ from lightsbm import LightSBM  # noqa: E402
 from run_matched_budget_2d import (BATCH_SIZE, DIM, EVAL_SEED_OFFSET, LR, N_EVAL, N_POTENTIALS,  # noqa: E402
                                    S_INIT, SAFE_T, SAMPLING_BATCH, TASKS, terminal_samples, write_atomic)
 from train_lightsbb_beta_large import training_sbb_beta_large  # noqa: E402
+from train_lightsbb_beta_large_legacy import training_sbb_beta_large as legacy_training  # noqa: E402
 from utils import GeneratorTwoD, wasserstein  # noqa: E402
 
 ROOT = LIGHT_SBB.parent
 RESULTS_DIR = ROOT / "results" / "legacy_2d"
 ARCHIVE = ROOT / "legacy_2d.tar.gz"
 
-# Last commit before gradient clipping and the stop-gradient on the map were added.
-OLD_LOOP_REV = "a0c1808"
 LEGACY_K = {"M8G": 5, "NM": 25}
 BASE_EPOCHS = 10000
 MIN_EPOCHS = 5000
@@ -66,23 +62,6 @@ def parse_args():
 def stage_epochs(k):
     """Return the epochs of outer stage ``k`` under the March 2026 schedule."""
     return max(MIN_EPOCHS, int(BASE_EPOCHS * np.exp(-0.2 * k)))
-
-
-def load_old_loop():
-    """Import the training loop as it stood at ``OLD_LOOP_REV``, from git history.
-
-    Returns:
-        The ``training_sbb_beta_large`` function of that commit.
-    """
-    source = subprocess.run(["git", "show", f"{OLD_LOOP_REV}:light_sbb/train_lightsbb_beta_large.py"],
-                            cwd=ROOT, check=True, capture_output=True, text=True).stdout
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "old_loop.py"
-        path.write_text(source, encoding="utf8")
-        spec = importlib.util.spec_from_file_location("old_loop", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    return module.training_sbb_beta_large
 
 
 def train(task, config, seed, source, target, device):
@@ -117,7 +96,7 @@ def train(task, config, seed, source, target, device):
     settings = dict(K=stages, n_epochs=epochs, batch_size=BATCH_SIZE, lr=LR, eps=eps, safe_t=SAFE_T, device=device)
     start = time.perf_counter()
     if loop == "old":
-        model = load_old_loop()(source, target, model, train_beta, **settings)
+        model = legacy_training(source, target, model, train_beta, **settings)
     else:
         model = training_sbb_beta_large(source, target, model, train_beta, min_epoch=MIN_EPOCHS, **settings)
     return model, steps, time.perf_counter() - start
