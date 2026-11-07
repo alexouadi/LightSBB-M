@@ -38,7 +38,9 @@ TASKS = {
     "M8G": ("moons", "8gaussians", 5.0, 100.0, 5),
     "NM": ("normal", "moons", 1.0, 100.0, 5),
 }
-METHODS = ("sbb", "sb", "sb_matched")
+METHODS = ("sbb", "sb", "sb_matched", "sb_beta_inf")
+# The Table 2 recipe for LightSB-M: one stage at a huge beta, no Bass map at inference.
+BETA_INF = 1e5
 DIM = 2
 N_POTENTIALS = 50
 S_INIT = 0.1
@@ -110,9 +112,10 @@ def train(task, method, seed, source, target, device, print_every):
 
     stages = K if method == "sbb" else 1
     epochs = K * STAGE_EPOCHS if method == "sb_matched" else STAGE_EPOCHS
+    train_beta = {"sbb": beta, "sb_beta_inf": BETA_INF}.get(method, 1.0)
     start = time.perf_counter()
     model = training_sbb_beta_large(
-        source, target, model, beta if method == "sbb" else 1.0, K=stages, n_epochs=epochs,
+        source, target, model, train_beta, K=stages, n_epochs=epochs,
         min_epoch=epochs, batch_size=BATCH_SIZE, lr=LR, eps=eps, safe_t=SAFE_T,
         print_every=print_every, device=device,
     )
@@ -217,7 +220,8 @@ def run_one(task, method, seed, device, print_every):
             raise ValueError("non-finite terminal samples")
 
         s_max = model.S_log_diagonal_matrix.exp().max(dim=0).values
-        metrics = {"task": task, "method": method, "seed": seed, "eps": eps, "beta": beta, "K": K,
+        metrics = {"task": task, "method": method, "seed": seed, "eps": eps,
+                   "beta": BETA_INF if method == "sb_beta_inf" else beta, "K": K,
                    "w2": float(wasserstein(x_T, x_target)), "n_gradient_steps": n_steps,
                    "train_seconds": train_seconds,
                    "s_max_min_coordinate": float(s_max.min())}
