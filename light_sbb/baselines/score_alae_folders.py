@@ -290,6 +290,32 @@ def bin_midpoint(label):
     return float(np.mean(numbers)) if len(numbers) == 2 else numbers[0] + 5.0
 
 
+def load_age_classifier(model_dir, device):
+    """Load the age classifier's processor and model from a local folder.
+
+    Transformers refuses ``pytorch_model.bin`` under torch < 2.6, so the weights are read here with
+    ``torch.load(weights_only=True)``, which is the safe loader, into a model built from the config.
+
+    Returns:
+        Tuple of the image processor and the model, on ``device`` and in eval mode.
+    """
+    from transformers import AutoConfig, AutoImageProcessor, AutoModelForImageClassification
+
+    processor = AutoImageProcessor.from_pretrained(model_dir)
+    weights = Path(model_dir) / "pytorch_model.bin"
+    if weights.exists():
+        model = AutoModelForImageClassification.from_config(AutoConfig.from_pretrained(model_dir))
+        # Old checkpoints may carry unused pooler weights; missing weights would leave the model random.
+        missing, unexpected = model.load_state_dict(torch.load(weights, map_location="cpu", weights_only=True),
+                                                    strict=False)
+        if missing:
+            raise ValueError(f"age classifier weights missing: {missing}")
+        print(f"age classifier loaded, unused checkpoint keys: {unexpected}", flush=True)
+    else:
+        model = AutoModelForImageClassification.from_pretrained(model_dir)
+    return processor, model.to(device).eval()
+
+
 def classifier_ages(processor, model, folder, names, device, batch_size):
     """Run the HuggingFace age classifier on every image.
 
@@ -330,12 +356,9 @@ def age_rescore(app, root, args, rng, device):
 
     Writes ``age_rescore.json`` and one CSV per folder, then one archive.
     """
-    from transformers import AutoImageProcessor, AutoModelForImageClassification
-
     out_dir = RESULTS_DIR / "age_rescore"
     out_dir.mkdir(parents=True, exist_ok=True)
-    processor = AutoImageProcessor.from_pretrained(args.age_model_dir)
-    model = AutoModelForImageClassification.from_pretrained(args.age_model_dir).to(device).eval()
+    processor, model = load_age_classifier(args.age_model_dir, device)
     labels = [model.config.id2label[i] for i in range(model.config.num_labels)]
     report ={"insightface_border": AGE_PAD, "age_model": Path(args.age_model_dir).name, "folders": {}}
     # Paired folders, plus real children as a check of what each age model calls a child.
