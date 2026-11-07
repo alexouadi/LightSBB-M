@@ -33,6 +33,7 @@ from train_lightsbb import training_sbb  # noqa: E402
 from utils import TensorSampler  # noqa: E402
 
 SWEEPS = {"random": "j_sweep", "samples": "j_sweep_r_samples"}
+DEFAULT_EPS = 0.1
 T_MODEL = 32
 D_MODEL = 128
 SUMMARY_FIELDS = ["J", "seed", "pct_age_leq_18", "avg_age", "std_age", "identity_sim_mean",
@@ -47,7 +48,7 @@ def parse_args():
     p.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--beta", type=float, default=1.0)
-    p.add_argument("--eps", type=float, default=0.1)
+    p.add_argument("--eps", type=float, default=DEFAULT_EPS)
     p.add_argument("--k", type=int, default=5)
     p.add_argument("--n-epochs", type=int, default=15000)
     p.add_argument("--min-epoch", type=int, default=5000)
@@ -56,6 +57,8 @@ def parse_args():
     p.add_argument("--s-init", type=float, default=0.1)
     p.add_argument("--r-init", choices=sorted(SWEEPS), default="random",
                    help="initial mixture means; each choice has its own results folder and archive")
+    p.add_argument("--no-grad-clip", action="store_true",
+                   help="train without gradient clipping, as the original ALAE checkpoints were")
     p.add_argument("--safe-t", type=float, default=1e-2)
     p.add_argument("--print-every", type=int, default=4000)
     p.add_argument("--n-images", type=int, default=1000)
@@ -69,14 +72,24 @@ def parse_args():
     return p.parse_args()
 
 
+def sweep_name(args):
+    """Return the folder name of this sweep, so settings never share or skip each other's runs."""
+    name = SWEEPS[args.r_init]
+    if args.eps != DEFAULT_EPS:
+        name += f"_e{args.eps:g}"
+    if args.no_grad_clip:
+        name += "_noclip"
+    return name
+
+
 def results_dir(args):
     """Return the results folder of this sweep."""
-    return ROOT / "results" / "alae_baselines" / SWEEPS[args.r_init]
+    return ROOT / "results" / "alae_baselines" / sweep_name(args)
 
 
 def checkpoint_dir(args):
     """Return the checkpoint folder of this sweep."""
-    return MODEL_DIR / SWEEPS[args.r_init]
+    return MODEL_DIR / sweep_name(args)
 
 
 def write_atomic(path, write):
@@ -161,6 +174,7 @@ def train_run(J, seed, args, device, checkpoint_path):
         "min_epoch": args.min_epoch,
         "s_init": args.s_init,
         "r_init": args.r_init,
+        "grad_clip": not args.no_grad_clip,
         "safe_t": args.safe_t,
         "n_parameters": sum(p.numel() for p in model.parameters()),
         "train_seconds": time.perf_counter() - start,
@@ -265,7 +279,7 @@ def evaluate_run(J, seed, args, device, checkpoint):
     del model, model_inv
     prepare_shared_images(run_args, x_0, device)
 
-    tag = f"{SWEEPS[args.r_init]}/J{J}"
+    tag = f"{sweep_name(args)}/J{J}"
     architecture = {k: v for k, v in checkpoint.items() if not isinstance(v, dict)}
     metrics_path = Path(score_transport(run_args, tag, x_0, x_1, architecture, device))
 
@@ -302,7 +316,7 @@ def write_summary(args):
 
 def archive_path(args):
     """Return the archive of this sweep at the repo root."""
-    return ROOT / f"alae_{SWEEPS[args.r_init]}.tar.gz"
+    return ROOT / f"alae_{sweep_name(args)}.tar.gz"
 
 
 def write_archive(args):
@@ -361,6 +375,9 @@ def run_one(J, seed, args, device):
 def main():
     """Run every requested (J, seed) pair in turn on the chosen device."""
     args = parse_args()
+    if args.no_grad_clip:
+        # The training loops clip unconditionally and look the function up at each step.
+        torch.nn.utils.clip_grad_norm_ = lambda *_, **__: None
     torch.set_num_threads(args.threads)
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
