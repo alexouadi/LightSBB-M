@@ -43,6 +43,8 @@ def parse_args():
     p.add_argument("--n-fid-draws", type=int, default=50, help="half-size subsets drawn to measure the FID spread")
     p.add_argument("--batch-size", type=int, default=50)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--identity-check", action="store_true",
+                   help="only check the identity pairing of the paired folders, no FID")
     return p.parse_args()
 
 
@@ -174,6 +176,99 @@ def copy_examples(folder, names, dest):
         shutil.copy(os.path.join(folder, name), os.path.join(dest, name))
 
 
+def contact_sheet(root, rows, dest):
+    """Save input | sb | sbb side by side for a few pairs, with file names and ArcFace cosines."""
+    from PIL import ImageDraw
+
+    tiles = []
+    for row in rows:
+        imgs = [Image.open(root / PAIRED[k] / row[f"{k}_file"]).convert("RGB").resize((256, 256))
+                for k in ("input", "sb", "sbb")]
+        tile = Image.new("RGB", (3 * 256, 256 + 40), "white")
+        for i, img in enumerate(imgs):
+            tile.paste(img, (256 * i, 40))
+        label = (f"{row['input_file']} | {row['sb_file']} cos={row['sb_cos']} | "
+                 f"{row['sbb_file']} cos={row['sbb_cos']}")
+        ImageDraw.Draw(tile).text((5, 12), label, fill="black")
+        tiles.append(tile)
+    sheet = Image.new("RGB", (3 * 256, len(tiles) * 296), "white")
+    for i, tile in enumerate(tiles):
+        sheet.paste(tile, (0, 296 * i))
+    sheet.save(dest)
+
+
+def best_match_offsets(emb_in, emb_out):
+    """Return, for each input, the position offset of its most similar output under ArcFace.
+
+    Args:
+        emb_in: (n, 512) normalized input embeddings, NaN rows for missing faces.
+        emb_out: (n, 512) normalized output embeddings, same convention.
+
+    Returns:
+        Dict with the top-1 rate of the assumed pairing and the most frequent offsets.
+    """
+    sim = np.nan_to_num(emb_in @ emb_out.T, nan=-np.inf)
+    valid = np.isfinite(sim).any(1)
+    best = sim.argmax(1)
+    offsets = (best - np.arange(len(best)))[valid]
+    values, counts = np.unique(offsets, return_counts=True)
+    order = np.argsort(-counts)[:5]
+    return {"n_inputs_with_face": int(valid.sum()),
+            "top1_rate_assumed_pairing": float((offsets == 0).mean()) if valid.any() else None,
+            "most_frequent_offsets": [[int(values[i]), int(counts[i])] for i in order]}
+
+
+def identity_check(app, root, rng):
+    """Check whether the paired folders are aligned and how ArcFace compares with a random pairing.
+
+    Writes ``identity_check.json``, the per-pair cosines and a contact sheet, then one archive.
+    """
+    out_dir = RESULTS_DIR / "identity_check"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    names = {k: list_images(root / sub) for k, sub in PAIRED.items()}
+    records = {k: face_records(app, root / PAIRED[k], names[k]) for k in PAIRED}
+
+    def embeddings(key, order):
+        return np.stack([records[key][n]["embedding"] if records[key][n]["embedding"] is not None
+                         else np.full(512, np.nan) for n in order])
+
+    report = {"n_files": {k: len(v) for k, v in names.items()},
+              "first_files": {k: v[:10] for k, v in names.items()}}
+    rows = []
+    for method in ("sb", "sbb"):
+        pairs, mode = pair_names(names["input"], names[method])
+        e_in = embeddings("input", [a for a, _ in pairs])
+        e_out = embeddings(method, [b for _, b in pairs])
+        cos = np.einsum("ij,ij->i", e_in, e_out)
+        ok = np.isfinite(cos)
+        shuffled = np.einsum("ij,ij->i", e_in, e_out[rng.permutation(len(e_out))])
+        pix = np.array([pixel_cosine(root / PAIRED["input"] / a, root / PAIRED[method] / b) for a, b in pairs])
+        pix_shuffled = np.array([pixel_cosine(root / PAIRED["input"] / a, root / PAIRED[method] / b)
+                                 for (a, _), (_, b) in zip(pairs, [pairs[i] for i in rng.permutation(len(pairs))])])
+        report[method] = {"pairing": mode, "pairs_shown": pairs[:10],
+                          "arcface_assumed_pairing": float(np.nanmean(cos)) if ok.any() else None,
+                          "arcface_random_pairing": float(np.nanmean(shuffled)),
+                          "pixel_assumed_pairing": float(pix.mean()), "pixel_random_pairing": float(pix_shuffled.mean()),
+                          **best_match_offsets(e_in, e_out)}
+        for i, (a, b) in enumerate(pairs):
+            if method == "sb":
+                rows.append({"input_file": a})
+            rows[i][f"{method}_file"] = b
+            rows[i][f"{method}_cos"] = "nan" if not ok[i] else f"{cos[i]:.2f}"
+        print(f"identity check {method}", json.dumps(report[method]), flush=True)
+
+    with open(out_dir / "pairs.csv", "w", newline="") as f:
+        writer = csv.DictWriter(f, list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    contact_sheet(root, rows[:N_SHOW], out_dir / "pairs_contact_sheet.png")
+    (out_dir / "identity_check.json").write_text(json.dumps(report, indent=2))
+    archive = ROOT / "alae_identity_check.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(out_dir, arcname=out_dir.relative_to(ROOT).as_posix())
+    print(f"archive: {archive}", flush=True)
+
+
 def main():
     """Score both folder families and write one summary and one archive."""
     args = parse_args()
@@ -185,6 +280,9 @@ def main():
     from insightface.app import FaceAnalysis
     app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
     app.prepare(ctx_id=0)
+    if args.identity_check:
+        identity_check(app, root, rng)
+        return
 
     summary = {"image_root": str(root), "child_age": CHILD_AGE, "folders": {}}
     paired_records = {}
