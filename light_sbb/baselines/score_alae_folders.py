@@ -53,7 +53,7 @@ def parse_args():
     p.add_argument("--identity-check", action="store_true",
                    help="only check the identity pairing of the paired folders, no FID")
     p.add_argument("--age-rescore", action="store_true",
-                   help="only rescore ages, with InsightFace on bordered images and a second age model, no FID")
+                   help="only rescore the paired folders' ages, with bordered InsightFace and a second age model, no FID")
     p.add_argument("--age-model-dir", default=None,
                    help="local folder of the HuggingFace age classifier (nateraw/vit-age-classifier)")
     return p.parse_args()
@@ -326,7 +326,7 @@ def classifier_summary(probs, labels, rng):
 
 
 def age_rescore(app, root, args, rng, device):
-    """Rescore the age of all six folders with InsightFace on bordered images and with the age classifier.
+    """Rescore the age of the paired folders and of some real children, with bordered InsightFace and the classifier.
 
     Writes ``age_rescore.json`` and one CSV per folder, then one archive.
     """
@@ -338,9 +338,11 @@ def age_rescore(app, root, args, rng, device):
     model = AutoModelForImageClassification.from_pretrained(args.age_model_dir).to(device).eval()
     labels = [model.config.id2label[i] for i in range(model.config.num_labels)]
     report ={"insightface_border": AGE_PAD, "age_model": Path(args.age_model_dir).name, "folders": {}}
-    folders = {**{f"paired_{k}": v for k, v in PAIRED.items()}, **{f"unpaired_{k}": v for k, v in UNPAIRED.items()}}
-    for key, sub in folders.items():
-        names = list_images(root / sub)
+    # Paired folders, plus real children as a check of what each age model calls a child.
+    folders = {**{f"paired_{k}": (v, None) for k, v in PAIRED.items()},
+               "unpaired_real": (UNPAIRED["real"], N_REAL_CHECK)}
+    for key, (sub, limit) in folders.items():
+        names = list_images(root / sub)[:limit]
         probs = classifier_ages(processor, model, root / sub, names, device, args.batch_size)
         records = face_records(app, root / sub, names, AGE_PAD)
         report["folders"][key] = {"folder": sub, "insightface": age_summary(records, rng),
