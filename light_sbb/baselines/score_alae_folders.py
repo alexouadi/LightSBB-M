@@ -35,6 +35,8 @@ N_BOOT = 1000
 N_SHOW = 8
 PAD_FRACTIONS = (0.0, 0.25, 0.5)
 N_REAL_CHECK = 300
+# Fraction of the aligned image kept around its center, close to ArcFace's 112x112 framing of FFHQ faces.
+CENTER_CROP = 0.62
 
 
 def parse_args():
@@ -225,6 +227,56 @@ def best_match_offsets(emb_in, emb_out):
             "most_frequent_offsets": [[int(values[i]), int(counts[i])] for i in order]}
 
 
+def arcface_center_crop(app, folder, names, out_dir=None):
+    """Embed each image with ArcFace on a fixed central crop, without the face detector.
+
+    The images are aligned faces, so a fixed crop stands in for the detector's alignment.
+
+    Args:
+        app: Prepared ``FaceAnalysis``, whose recognition model is used.
+        folder: Image directory.
+        names: File names to read.
+        out_dir: If given, the first crops are saved there to check they frame the face.
+
+    Returns:
+        (n, 512) L2-normalized embeddings.
+    """
+    model = app.models["recognition"]
+    crops = []
+    for name in names:
+        img = cv2.imread(os.path.join(folder, name))
+        h, w = img.shape[:2]
+        side = int(CENTER_CROP * min(h, w))
+        top, left = (h - side) // 2, (w - side) // 2
+        crops.append(cv2.resize(img[top:top + side, left:left + side], (112, 112)))
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for name, crop in zip(names[:N_SHOW], crops):
+            cv2.imwrite(str(out_dir / name), crop)
+    emb = np.concatenate([model.get_feat(crops[i:i + 64]) for i in range(0, len(crops), 64)])
+    return emb / np.linalg.norm(emb, axis=1, keepdims=True)
+
+
+def retrieval_scores(emb_in, emb_out):
+    """Score how often each input's own output is among its most similar outputs.
+
+    Args:
+        emb_in: (n, d) normalized input embeddings.
+        emb_out: (n, d) normalized output embeddings, row i transported from input i.
+
+    Returns:
+        Dict with the mean cosine of true and of other pairs, and top-1 and top-5 rates against chance.
+    """
+    sim = emb_in @ emb_out.T
+    n = len(sim)
+    true = np.diag(sim)
+    rank = (sim > true[:, None]).sum(1)
+    return {"n": n, "cosine_true_pairs": float(true.mean()),
+            "cosine_other_pairs": float(sim[~np.eye(n, dtype=bool)].mean()),
+            "top1_rate": float((rank < 1).mean()), "top5_rate": float((rank < 5).mean()),
+            "top1_chance": 1.0 / n, "top5_chance": 5.0 / n}
+
+
 def identity_check(app, root, rng):
     """Check the pairing and the face detection of the paired folders, for several image borders.
 
@@ -237,6 +289,13 @@ def identity_check(app, root, rng):
     report = {"image_size": {k: list(Image.open(root / PAIRED[k] / names[k][0]).size) for k in PAIRED},
               "n_files": {k: len(v) for k, v in names.items()},
               "first_files": {k: v[:10] for k, v in names.items()}}
+    pairs = {m: pair_names(names["input"], names[m])[0] for m in ("sb", "sbb")}
+    emb_in = arcface_center_crop(app, root / PAIRED["input"], names["input"], out_dir / "crops_input")
+    for method in ("sb", "sbb"):
+        emb_out = arcface_center_crop(app, root / PAIRED[method], [b for _, b in pairs[method]],
+                                      out_dir / f"crops_{method}")
+        report[f"arcface_center_crop_{method}"] = retrieval_scores(emb_in, emb_out)
+        print(f"arcface center crop {method}", json.dumps(report[f"arcface_center_crop_{method}"]), flush=True)
     for pad in PAD_FRACTIONS:
         records = {k: face_records(app, root / PAIRED[k], names[k], pad) for k in PAIRED}
         real = face_records(app, root / UNPAIRED["real"], real_names, pad)
