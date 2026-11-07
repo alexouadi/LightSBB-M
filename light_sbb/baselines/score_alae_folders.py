@@ -9,6 +9,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import shutil
 import sys
 import tarfile
@@ -37,6 +38,8 @@ PAD_FRACTIONS = (0.0, 0.25, 0.5)
 N_REAL_CHECK = 300
 # Fraction of the aligned image kept around its center, close to ArcFace's 112x112 framing of FFHQ faces.
 CENTER_CROP = 0.62
+# Border that brings InsightFace detection to 100% on these aligned faces (identity check, 2026-11-07).
+AGE_PAD = 0.25
 
 
 def parse_args():
@@ -49,6 +52,10 @@ def parse_args():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--identity-check", action="store_true",
                    help="only check the identity pairing of the paired folders, no FID")
+    p.add_argument("--age-rescore", action="store_true",
+                   help="only rescore ages, with InsightFace on bordered images and a second age model, no FID")
+    p.add_argument("--age-model-dir", default=None,
+                   help="local folder of the HuggingFace age classifier (nateraw/vit-age-classifier)")
     return p.parse_args()
 
 
@@ -277,6 +284,85 @@ def retrieval_scores(emb_in, emb_out):
             "top1_chance": 1.0 / n, "top5_chance": 5.0 / n}
 
 
+def bin_midpoint(label):
+    """Return a representative age for an age-bin label such as ``"10-19"`` or ``"more than 70"``."""
+    numbers = [int(s) for s in re.findall(r"\d+", label)]
+    return float(np.mean(numbers)) if len(numbers) == 2 else numbers[0] + 5.0
+
+
+def classifier_ages(processor, model, folder, names, device, batch_size):
+    """Run the HuggingFace age classifier on every image.
+
+    Args:
+        processor: The classifier's image processor.
+        model: The classifier, on ``device`` and in eval mode.
+        folder: Image directory.
+        names: File names to read.
+        device: Torch device.
+        batch_size: Images per forward pass.
+
+    Returns:
+        (n, n_bins) class probabilities.
+    """
+    probs = []
+    for start in range(0, len(names), batch_size):
+        images = [Image.open(os.path.join(folder, n)).convert("RGB") for n in names[start:start + batch_size]]
+        inputs = processor(images=images, return_tensors="pt").to(device)
+        with torch.no_grad():
+            probs.append(model(**inputs).logits.softmax(-1).cpu().numpy())
+    return np.concatenate(probs)
+
+
+def classifier_summary(probs, labels, rng):
+    """Summarize the classifier's bins: share of images per predicted bin, under 10 and under 20, mean age."""
+    top = probs.argmax(1)
+    upper = [max(int(s) for s in re.findall(r"\d+", lab)) for lab in labels]
+    under = {age: np.array([upper[k] < age for k in top], dtype=float) * 100 for age in (10, 20)}
+    expected_age = probs @ np.array([bin_midpoint(lab) for lab in labels])
+    return {"n_images": int(len(probs)),
+            "pct_per_bin": {lab: float(100 * (top == k).mean()) for k, lab in enumerate(labels)},
+            "pct_under_10": bootstrap(under[10], rng), "pct_under_20": bootstrap(under[20], rng),
+            "mean_age_from_bin_midpoints": bootstrap(expected_age, rng)}
+
+
+def age_rescore(app, root, args, rng, device):
+    """Rescore the age of all six folders with InsightFace on bordered images and with the age classifier.
+
+    Writes ``age_rescore.json`` and one CSV per folder, then one archive.
+    """
+    from transformers import AutoImageProcessor, AutoModelForImageClassification
+
+    out_dir = RESULTS_DIR / "age_rescore"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    processor = AutoImageProcessor.from_pretrained(args.age_model_dir)
+    model = AutoModelForImageClassification.from_pretrained(args.age_model_dir).to(device).eval()
+    labels = [model.config.id2label[i] for i in range(model.config.num_labels)]
+    report ={"insightface_border": AGE_PAD, "age_model": Path(args.age_model_dir).name, "folders": {}}
+    folders = {**{f"paired_{k}": v for k, v in PAIRED.items()}, **{f"unpaired_{k}": v for k, v in UNPAIRED.items()}}
+    for key, sub in folders.items():
+        names = list_images(root / sub)
+        probs = classifier_ages(processor, model, root / sub, names, device, args.batch_size)
+        records = face_records(app, root / sub, names, AGE_PAD)
+        report["folders"][key] = {"folder": sub, "insightface": age_summary(records, rng),
+                                  "classifier": classifier_summary(probs, labels, rng)}
+        with open(out_dir / f"ages_{key}.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["file", "insightface_largest_face_age", *labels])
+            for name, p in zip(names, probs):
+                writer.writerow([name, records[name]["largest_age"], *(f"{x:.4f}" for x in p)])
+        r = report["folders"][key]
+        print(f"{key}: insightface mean={r['insightface'].get('per_image_mean_age', {}).get('value')} "
+              f"pct<=18={r['insightface'].get('per_image_pct_child', {}).get('value')} | "
+              f"classifier pct<10={r['classifier']['pct_under_10']['value']:.1f} "
+              f"pct<20={r['classifier']['pct_under_20']['value']:.1f}", flush=True)
+
+    (out_dir / "age_rescore.json").write_text(json.dumps(report, indent=2))
+    archive = ROOT / "alae_age_rescore.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(out_dir, arcname=out_dir.relative_to(ROOT).as_posix())
+    print(f"archive: {archive}", flush=True)
+
+
 def identity_check(app, root, rng):
     """Check the pairing and the face detection of the paired folders, for several image borders.
 
@@ -372,6 +458,9 @@ def main():
     app.prepare(ctx_id=0)
     if args.identity_check:
         identity_check(app, root, rng)
+        return
+    if args.age_rescore:
+        age_rescore(app, root, args, rng, device)
         return
 
     summary = {"image_root": str(root), "child_age": CHILD_AGE, "folders": {}}
