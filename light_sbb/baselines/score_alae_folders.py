@@ -33,6 +33,8 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 CHILD_AGE = 18
 N_BOOT = 1000
 N_SHOW = 8
+PAD_FRACTIONS = (0.0, 0.25, 0.5)
+N_REAL_CHECK = 300
 
 
 def parse_args():
@@ -71,13 +73,15 @@ def bootstrap(values, rng, statistic=np.mean):
             "sd_over_images": float(values.std(ddof=1)), "n": int(len(values))}
 
 
-def face_records(app, folder, names):
+def face_records(app, folder, names, pad=0.0):
     """Run InsightFace on every image and keep the age of all faces and the largest face's embedding.
 
     Args:
         app: Prepared ``FaceAnalysis``.
         folder: Image directory.
         names: File names to read.
+        pad: Border added on each side, as a fraction of the image size, since the detector misses
+            faces that fill the whole frame.
 
     Returns:
         Dict mapping each name to ``{"ages": [...], "embedding": array or None}``.
@@ -85,6 +89,9 @@ def face_records(app, folder, names):
     records = {}
     for name in names:
         img = cv2.imread(os.path.join(folder, name))
+        if img is not None and pad > 0:
+            b = int(pad * max(img.shape[:2]))
+            img = cv2.copyMakeBorder(img, b, b, b, b, cv2.BORDER_CONSTANT, value=0)
         faces = app.get(img) if img is not None else []
         largest = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), default=None)
         records[name] = {"ages": [float(f.age) for f in faces],
@@ -219,21 +226,50 @@ def best_match_offsets(emb_in, emb_out):
 
 
 def identity_check(app, root, rng):
-    """Check whether the paired folders are aligned and how ArcFace compares with a random pairing.
+    """Check the pairing and the face detection of the paired folders, for several image borders.
 
-    Writes ``identity_check.json``, the per-pair cosines and a contact sheet, then one archive.
+    Writes ``identity_check.json``, the per-pair cosines and a contact sheet per border, then one archive.
     """
     out_dir = RESULTS_DIR / "identity_check"
     out_dir.mkdir(parents=True, exist_ok=True)
     names = {k: list_images(root / sub) for k, sub in PAIRED.items()}
-    records = {k: face_records(app, root / PAIRED[k], names[k]) for k in PAIRED}
+    real_names = list_images(root / UNPAIRED["real"])[:N_REAL_CHECK]
+    report = {"image_size": {k: list(Image.open(root / PAIRED[k] / names[k][0]).size) for k in PAIRED},
+              "n_files": {k: len(v) for k, v in names.items()},
+              "first_files": {k: v[:10] for k, v in names.items()}}
+    for pad in PAD_FRACTIONS:
+        records = {k: face_records(app, root / PAIRED[k], names[k], pad) for k in PAIRED}
+        real = face_records(app, root / UNPAIRED["real"], real_names, pad)
+        report[f"pad_{pad}"] = {
+            "detection_rate": {k: float(np.mean([r["embedding"] is not None for r in records[k].values()]))
+                               for k in PAIRED},
+            "ages": {k: age_summary(records[k], rng) for k in PAIRED},
+            "real_children_first_images": age_summary(real, rng),
+            **pairing_scores(root, names, records, rng, out_dir / f"pad_{pad}")}
+        r = report[f"pad_{pad}"]
+        ages = {k: round(a["per_image_mean_age"]["value"], 1) for k, a in
+                {**r["ages"], "real": r["real_children_first_images"]}.items() if "per_image_mean_age" in a}
+        arcface = {m: (r[m]["arcface_assumed_pairing"], r[m]["arcface_random_pairing"], r[m]["most_frequent_offsets"][:2])
+                   for m in ("sb", "sbb")}
+        print(f"pad={pad} detection={r['detection_rate']} mean_age={ages} "
+              f"arcface(assumed, random, offsets)={arcface}", flush=True)
+
+    (out_dir / "identity_check.json").write_text(json.dumps(report, indent=2))
+    archive = ROOT / "alae_identity_check.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(out_dir, arcname=out_dir.relative_to(ROOT).as_posix())
+    print(f"archive: {archive}", flush=True)
+
+
+def pairing_scores(root, names, records, rng, out_dir):
+    """Score ArcFace and pixel cosines under the assumed and a random pairing, and save the pairs."""
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     def embeddings(key, order):
         return np.stack([records[key][n]["embedding"] if records[key][n]["embedding"] is not None
                          else np.full(512, np.nan) for n in order])
 
-    report = {"n_files": {k: len(v) for k, v in names.items()},
-              "first_files": {k: v[:10] for k, v in names.items()}}
+    report = {}
     rows = []
     for method in ("sb", "sbb"):
         pairs, mode = pair_names(names["input"], names[method])
@@ -255,18 +291,13 @@ def identity_check(app, root, rng):
                 rows.append({"input_file": a})
             rows[i][f"{method}_file"] = b
             rows[i][f"{method}_cos"] = "nan" if not ok[i] else f"{cos[i]:.2f}"
-        print(f"identity check {method}", json.dumps(report[method]), flush=True)
 
     with open(out_dir / "pairs.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
     contact_sheet(root, rows[:N_SHOW], out_dir / "pairs_contact_sheet.png")
-    (out_dir / "identity_check.json").write_text(json.dumps(report, indent=2))
-    archive = ROOT / "alae_identity_check.tar.gz"
-    with tarfile.open(archive, "w:gz") as tar:
-        tar.add(out_dir, arcname=out_dir.relative_to(ROOT).as_posix())
-    print(f"archive: {archive}", flush=True)
+    return report
 
 
 def main():
